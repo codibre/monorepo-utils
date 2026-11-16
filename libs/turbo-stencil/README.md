@@ -37,9 +37,10 @@ The generated files are **gitignored**: no more config diffs in pull requests,
 no more someone hand-editing a generated file.
 
 ```sh
-pnpm dlx @codibre/turbo-stencil init   # reverse-engineers stencil.json from your existing configs
-pnpm dlx @codibre/turbo-stencil sync   # (re)generate everything
-pnpm dlx @codibre/turbo-stencil check  # CI gate: fail if anything drifted
+pnpm add -D -w @codibre/turbo-stencil  # once: root devDependency
+pnpm exec turbo-stencil init           # reverse-engineers stencil.json from your existing configs
+pnpm exec turbo-stencil sync           # (re)generate everything
+pnpm exec turbo-stencil check          # CI gate: fail if anything drifted
 ```
 
 ## Why not X?
@@ -68,8 +69,8 @@ pnpm add -D -w @codibre/turbo-stencil
 ### 2. Run init
 
 ```sh
-pnpm stencil init --dry-run   # preview: shows the stencil.json it would write
-pnpm stencil init             # writes stencil.json, deletes the scattered files,
+pnpm exec turbo-stencil init --dry-run   # preview: shows the stencil.json it would write
+pnpm exec turbo-stencil init             # writes stencil.json, deletes the scattered files,
                               # git-rms them from the index, adds the .gitignore block
 ```
 
@@ -83,15 +84,16 @@ to restrict the scope.
 
 ### 3. Wire Turborepo
 
-Turborepo has no plugin API, so integration is one root task that every other
-task depends on:
+Turborepo has no plugin API, so integration is **one root task** that every
+other task depends on. A turbo task is just a name bound to a root
+`package.json` script, so the complete wiring is:
 
 ```jsonc
 // package.json (root)
 {
   "scripts": {
-    "stencil": "stencil sync",
-    "postinstall": "stencil sync", // files exist right after clone + pnpm install
+    // the root script that the //#turbo-stencil task runs
+    "turbo-stencil": "turbo-stencil sync",
   },
 }
 ```
@@ -100,7 +102,7 @@ task depends on:
 // turbo.json
 {
   "tasks": {
-    "//#stencil": {
+    "//#turbo-stencil": {
       "inputs": ["stencil.json", "pnpm-workspace.yaml"],
       "outputs": [
         "apps/*/tsconfig.json",
@@ -109,21 +111,24 @@ task depends on:
       ],
       "cache": true,
     },
-    "build": { "dependsOn": ["//#stencil", "^build"] },
-    "test": { "dependsOn": ["//#stencil"] },
-    "lint": { "dependsOn": ["//#stencil"] },
+    "build": { "dependsOn": ["//#turbo-stencil", "^build"] },
+    "test": { "dependsOn": ["//#turbo-stencil"] },
+    "lint": { "dependsOn": ["//#turbo-stencil"] },
   },
 }
 ```
 
-When `stencil.json` hasn't changed, turbo restores the outputs from cache and
-the generator doesn't even run. Declare every generated file in `outputs` —
-that is what makes gitignored files reappear on a fresh CI checkout.
+That is the whole integration: `pnpm i && pnpm build` on a fresh clone
+generates everything, and every later turbo command regenerates first — from
+turbo's cache when `stencil.json` hasn't changed, so the cost is zero.
+Declare **every** generated file in `outputs`: on a cache hit turbo restores
+exactly those paths, which is what makes the gitignored files reappear on a
+fresh CI checkout without running the generator.
 
-Also handy as a CI gate (`stencil check` never writes):
+Also handy as a CI gate (`turbo-stencil check` never writes):
 
 ```jsonc
-"//#stencil-check": { "dependsOn": [], "cache": false }  // + script "stencil:check": "stencil check"
+"turbo-stencil:check": { "cache": false }  // + script "turbo-stencil:check": "turbo-stencil check"
 ```
 
 ## `stencil.json` reference
@@ -170,18 +175,20 @@ drift, and [pnpm catalog](https://pnpm.io/catalogs) for dependency versions.
 
 ## The `.gitignore` trade-off (read this)
 
-Generated files being gitignored means a fresh clone only has them after
-`pnpm install` (postinstall) or the first turbo command. If your team opens
-the IDE before that, the TS server sees missing tsconfigs — so wire
-`postinstall`, and keep `stencil check` in CI as the safety net. If that is
-unacceptable for your workflow, just don't let init touch git: run
-`stencil init --keep --dry-run`, adapt the config, and commit the generated
-files as normal artifacts (`check` will still police them).
+Generated files being gitignored means a fresh clone only has them after the
+first turbo command. If someone opens the IDE before building, the TS server
+sees missing tsconfigs — the habit that fixes it is the one you already have:
+build right after `pnpm install`. You can additionally wire
+`"postinstall": "turbo-stencil sync"` to close the gap entirely, and
+`turbo-stencil check` in CI is the safety net either way. If gitignoring is
+unacceptable for your workflow, don't let init touch git: run
+`turbo-stencil init --keep --dry-run`, adapt the config, and commit the
+generated files as normal artifacts (`check` still polices them).
 
 ## CLI
 
 ```
-stencil <command> [options]
+turbo-stencil <command> [options]
 
   init     Reverse-engineer stencil.json from the configs scattered across
            workspaces; delete, gitignore and regenerate them.
@@ -198,10 +205,11 @@ stencil <command> [options]
   --verbose          also list unchanged files
 ```
 
-> **Binary name note.** The package exposes `stencil` and `turbo-stencil`.
-> `stencil` collides with [@stencil/core](https://stenciljs.com)'s CLI if both
-> are installed in the same project — in that case use `turbo-stencil` (same
-> behavior, same flags).
+> **Naming notes.** The binary is `turbo-stencil` only — this package
+> deliberately does **not** ship a `stencil` alias, which belongs to
+> [@stencil/core](https://stenciljs.com). Prefer `pnpm exec turbo-stencil …`
+> over `pnpm turbo-stencil …`: once the wiring script exists, the bare form
+> runs the script (`sync`) and appends your arguments to it.
 
 ## Programmatic API
 

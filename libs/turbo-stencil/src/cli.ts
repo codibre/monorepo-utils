@@ -12,7 +12,7 @@ import type { SyncResult } from './types';
 const USAGE = `turbo-stencil — keep monorepo config files in sync from one template
 
 Usage:
-  stencil <command> [options]
+  turbo-stencil <command> [options]
 
 Commands:
   init        Reverse-engineer stencil.json from the config files scattered
@@ -35,16 +35,18 @@ Options:
   -h, --help          Same as 'help'
   -v, --version       Same as 'version'
 
-Turbo wiring (root task runs before every command, cached):
-  package.json  "scripts": { "stencil": "stencil sync" },
-                "postinstall": "stencil sync"
+Turbo wiring (install as a root devDependency, then):
+  package.json  "scripts": { "turbo-stencil": "turbo-stencil sync" }
   turbo.json    "tasks": {
-                  "//#stencil": {
+                  "//#turbo-stencil": {
                     "inputs": ["stencil.json", "pnpm-workspace.yaml"],
                     "outputs": ["apps/*/tsconfig.json", "libs/*/tsconfig.json"]
                   },
-                  "build": { "dependsOn": ["//#stencil", "^build"] }
+                  "build": { "dependsOn": ["//#turbo-stencil", "^build"] }
                 }
+
+Every turbo command regenerates the managed files first — from turbo's
+cache when stencil.json did not change, so the cost is zero.
 `;
 
 interface Flags {
@@ -155,11 +157,11 @@ export async function main(argv: string[]): Promise<number> {
             const mark = item.status === 'created' ? 'missing ' : 'outdated ';
             console.error(`  ${mark} ${item.workspace}/${item.file}`);
           }
-          console.error("run 'stencil sync' to fix");
+          console.error("run 'turbo-stencil sync' to fix");
           return 1;
         }
         console.log(
-          'stencil check ok — every managed file matches the stencil',
+          'turbo-stencil check ok — every managed file matches the stencil',
         );
         return 0;
       }
@@ -198,7 +200,7 @@ export async function main(argv: string[]): Promise<number> {
           printSync(result.sync, flags.verbose);
         }
         console.log(
-          'next: wire the //#stencil root task in turbo.json and add "postinstall": "stencil sync" (see README)',
+          'next: wire turbo-stencil — root devDependency + script "turbo-stencil": "turbo-stencil sync" + the //#turbo-stencil task in turbo.json that build/test/lint depend on (see README)',
         );
         return 0;
       }

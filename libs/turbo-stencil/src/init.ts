@@ -32,7 +32,7 @@ import type {
 } from './types';
 
 /**
- * File names reverse-engineered by `stencil init` when --files is not given.
+ * File names reverse-engineered by `turbo-stencil init` when --files is not given.
  * Anything can be managed with --files; this list is the ergonomic default.
  */
 export const KNOWN_CONFIG_FILES = [
@@ -324,7 +324,7 @@ export function serializeConfig(config: StencilConfigInput): string {
     '// Managed by turbo-stencil.',
     '// Rule keys are regular expressions matched (full match) against the',
     '// workspace directory path. Order matters: rules merge top to bottom.',
-    "// After editing, run 'stencil sync' (or any turbo build, once wired).",
+    "// After editing, run 'turbo-stencil sync' (or any turbo command, once wired).",
   ].join('\n');
   return `${header}\n${JSON.stringify(config, null, 2)}\n`;
 }
