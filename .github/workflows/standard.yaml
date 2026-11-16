@@ -1,0 +1,23 @@
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+name: Standard
+
+jobs:
+  ci:
+    name: CI - Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Test
+        uses: ./.github/actions/build-and-test

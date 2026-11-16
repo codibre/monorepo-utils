@@ -1,0 +1,55 @@
+name: 'Build and Test'
+description: 'Setup environment, install dependencies, build, lint and test every package'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Get pnpm version
+      id: pnpm-version
+      shell: bash
+      run: |
+        PNPM_VERSION=$(grep -o '"packageManager": "pnpm@[^"]*"' package.json | sed 's/.*pnpm@\([^"]*\).*/\1/')
+        echo "version=$PNPM_VERSION" >> $GITHUB_OUTPUT
+        echo "Using pnpm version: $PNPM_VERSION"
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ steps.pnpm-version.outputs.version }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '26.x'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+      env:
+        HUSKY: 0
+
+    - name: Build packages
+      shell: bash
+      run: pnpm run build
+
+    - name: Lint packages
+      shell: bash
+      run: pnpm run lint
+
+    - name: Test packages
+      shell: bash
+      run: pnpm run test:cov
+
+    - name: Upload coverage
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: coverage/lcov.info
+        retention-days: 7
+        if-no-files-found: ignore

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2023"],
+    "resolveJsonModule": true,
+    "declaration": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "useUnknownInCatchVariables": true
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/eslint.config.mjs",
+    "**/tsup.config.ts"
+  ]
+}
