@@ -212,7 +212,7 @@ export async function buildPlan(
   const unmanaged: InitPlan['unmanaged'] = [];
 
   for (const file of requested) {
-    const format = defaultFormatFor(file);
+    let format = defaultFormatFor(file);
     const byHash = new Map<string, Cluster>();
     let existing = 0;
     for (const workspace of workspaces) {
@@ -231,6 +231,15 @@ export async function buildPlan(
         } catch (e) {
           unmanaged.push({ workspace, file, reason: (e as Error).message });
           continue;
+        }
+        if (format === 'json') {
+          try {
+            JSON.parse(raw);
+          } catch {
+            // the project writes this file with comments or trailing
+            // commas — respect that idiom instead of forcing strict JSON.
+            format = 'jsonc';
+          }
         }
         if (!isPlainObject(parsed)) {
           unmanaged.push({

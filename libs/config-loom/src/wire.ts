@@ -122,7 +122,7 @@ export async function wireRepo(
       : {};
 
     const desired = {
-      inputs: ['config-loom.json', 'pnpm-workspace.yaml'],
+      inputs: ['config-loom.jsonc', 'config-loom.json', 'pnpm-workspace.yaml'],
       outputs: options.outputs,
       cache: true,
     };

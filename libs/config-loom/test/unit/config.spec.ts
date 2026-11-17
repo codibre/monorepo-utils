@@ -14,6 +14,19 @@ function minimal(overrides: Partial<LoomConfigInput> = {}): LoomConfigInput {
   };
 }
 
+import { defaultFormatFor } from '../../src/config';
+
+describe('defaultFormatFor', () => {
+  it('prefers jsonc only where comments are safe toolchain- and IDE-side', () => {
+    expect(defaultFormatFor('tsconfig.json')).toBe('jsonc');
+    expect(defaultFormatFor('jsconfig.json')).toBe('jsonc');
+    expect(defaultFormatFor('nest-cli.json')).toBe('json');
+    expect(defaultFormatFor('tsconfig.build.json')).toBe('json');
+    expect(defaultFormatFor('config-loom.jsonc')).toBe('jsonc');
+    expect(defaultFormatFor('vitest.config.mts')).toBe('text');
+  });
+});
+
 describe('compileConfig', () => {
   it('applies defaults (format, arrays, banner)', () => {
     const config = compileConfig(minimal(), 'test');

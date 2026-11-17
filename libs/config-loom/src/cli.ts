@@ -17,7 +17,7 @@ Usage:
   config-loom <command> [options]
 
 Commands:
-  init        Reverse-engineer config-loom.json from the config files scattered
+  init        Reverse-engineer config-loom.jsonc from the config files scattered
               across workspaces, then delete them, gitignore them and
               regenerate them (use --dry-run to preview).
   sync        Generate every managed file (creates/updates only what changed).
@@ -30,11 +30,11 @@ Commands:
 
 Options:
   --root <dir>        Repository root (default: cwd)
-  --config <path>     config-loom.json path (default: <root>/config-loom.json)
+  --config <path>     config file path (default: <root>/config-loom.jsonc)
   --files <a,b,...>   [init] only these file names (default: scan known ones)
   --dry-run           Print what would happen; change nothing
   --keep              [init] leave existing files on disk (sync overwrites)
-  --force             [init] overwrite an existing config-loom.json
+  --force             [init] overwrite an existing config file
   --yes               Skip the confirmation prompt
   --verbose           Also list unchanged files
   -h, --help          Same as 'help'
@@ -233,7 +233,7 @@ export async function main(
         }
         if (flags.dryRun) {
           console.log(
-            `# config-loom.json that init would write to ${result.configPath}:`,
+            `# ${path.basename(result.configPath)} that init would write to ${result.configPath}:`,
           );
           process.stdout.write(serializeConfig(result.plan.config));
           console.log(

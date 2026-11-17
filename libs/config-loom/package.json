@@ -1,5 +1,5 @@
 {
-  "name": "@codibre/config-loom",
+  "name": "config-loom",
   "version": "0.0.0",
   "description": "Eliminate config drift in pnpm + Turborepo monorepos: generate tsconfig/eslint/vitest/jest files from one regex-rules template, kept out of git",
   "keywords": [
