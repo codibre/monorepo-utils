@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.2...config-loom%400.1.3) (2026-11-17)
+
+### Bug Fixes
+
+* removing totally unneeded disclaimer ([a45384b](https://github.com/codibre/monorepo-utils/commit/a45384bb56816d7fdb3aa80908b8a7949fe14c0c))
+
 ## [0.1.2](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.1...config-loom%400.1.2) (2026-11-17)
 
 ### Bug Fixes
