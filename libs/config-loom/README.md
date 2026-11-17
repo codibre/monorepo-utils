@@ -204,8 +204,10 @@ Rule semantics:
   follow `arrays`; everything else is overwritten.
 - For `text`, the **last matching rule replaces** the content entirely.
 - `"default": null` makes an entry opt-in: only workspaces hit by a rule get
-  the file. `init` uses this automatically when a file does not exist in every
-  workspace.
+  the file. When a file is missing from some workspaces, `init` prefers a
+  `default` + compact `exclude` family (new projects joining the excluded
+  family are ignored for free); it falls back to opt-in (`"default": null`)
+  only when the missing workspaces cannot be covered compactly.
 - Rule values must be objects (`json`/`jsonc`) or strings (`text`).
 
 ### What can never be generated

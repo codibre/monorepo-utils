@@ -774,9 +774,15 @@ export async function buildPlan(
     let fileExclude: string[] | undefined;
 
     if (format === 'text') {
-      // Text has no merge semantics: a default only makes sense when every
-      // workspace holds the file; otherwise stay opt-in (default: null).
-      if (fullCoverage) {
+      // Text has no merge semantics: a default applies wholesale to every
+      // workspace. Safe when every workspace holds the file, or when the
+      // workspaces lacking it collapse into a compact `exclude` family —
+      // same law as JSON below. Otherwise stay opt-in (`default: null`).
+      const excluded = fullCoverage
+        ? []
+        : synthesizeExclude(missing, present, workspaces);
+      const useDefault = fullCoverage || excluded !== null;
+      if (useDefault) {
         rules.default = mode.normalized;
         clusters.push({
           file,
@@ -787,7 +793,7 @@ export async function buildPlan(
       } else {
         rules.default = null;
       }
-      for (const cluster of fullCoverage ? sorted.slice(1) : sorted) {
+      for (const cluster of useDefault ? sorted.slice(1) : sorted) {
         const pattern = uniquePattern(
           rules,
           cluster.members,
@@ -800,6 +806,15 @@ export async function buildPlan(
           pattern,
           members: [...cluster.members],
           kind: 'full',
+        });
+      }
+      if (excluded && excluded.length > 0) {
+        fileExclude = excluded;
+        clusters.push({
+          file,
+          pattern: excluded.join(' | '),
+          members: [...missing],
+          kind: 'excluded',
         });
       }
     } else {
