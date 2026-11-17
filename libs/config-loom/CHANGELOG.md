@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.3...config-loom%400.2.0) (2026-11-17)
+
+### Features
+
+* **config-loom:** per-file exclude prop + merge-patch deltas over defaults ([a5cfcad](https://github.com/codibre/monorepo-utils/commit/a5cfcadbc4554e604cb48088c8be23473983ef0c))
+* **config-loom:** wildcard-first init ([ee0f685](https://github.com/codibre/monorepo-utils/commit/ee0f68596c2aac27208a02fb078f22a304fd2fde))
+
 ## [0.1.3](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.2...config-loom%400.1.3) (2026-11-17)
 
 ### Bug Fixes
