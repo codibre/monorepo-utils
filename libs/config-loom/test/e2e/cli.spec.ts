@@ -11,8 +11,8 @@ import {
 async function loadFrom(root: string) {
   const { readFile } = await import('node:fs/promises');
   const path = await import('node:path');
-  const text = await readFile(path.join(root, 'loom.json'), 'utf8');
-  return { config: compileConfig(JSON.parse(text), 'loom.json') };
+  const text = await readFile(path.join(root, 'config-loom.json'), 'utf8');
+  return { config: compileConfig(JSON.parse(text), 'config-loom.json') };
 }
 
 async function makeRepoWithLoom(): Promise<string> {
@@ -26,7 +26,7 @@ async function makeRepoWithLoom(): Promise<string> {
   await createWorkspace(root, 'apps/api');
   await putFile(
     root,
-    'loom.json',
+    'config-loom.json',
     JSON.stringify({
       files: {
         'tsconfig.json': {
@@ -93,7 +93,7 @@ describe('cli main()', () => {
     ).toBe(0);
   });
 
-  it('sync without a loom.json fails with a useful message', async () => {
+  it('sync without a config-loom.json fails with a useful message', async () => {
     const root = await makeTempDir();
     expect(
       await main(['sync', '--root', root], { runner: fakePnpmRunner }),

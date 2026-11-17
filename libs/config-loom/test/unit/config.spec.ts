@@ -152,16 +152,16 @@ describe('compileConfig', () => {
 });
 
 describe('loadConfig', () => {
-  it('reads loom.json with comments', async () => {
+  it('reads config-loom.json with comments', async () => {
     const root = await makeTempDir();
     await putFile(
       root,
-      'loom.json',
+      'config-loom.json',
       `// my loom
       { "files": { "tsconfig.json": { "rules": { "default": { "ok": true } } } } }`,
     );
     const { config, path } = await loadConfig(root);
-    expect(path).toContain('loom.json');
+    expect(path).toContain('config-loom.json');
     const entry = config.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
     expect(entry.defaultValue).toEqual({ ok: true });

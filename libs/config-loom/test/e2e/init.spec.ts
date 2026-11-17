@@ -90,7 +90,7 @@ describe('loom init', () => {
     const root = await makeScatteredRepo();
     const result = await initRepo(root, { yes: true, runner: fakePnpmRunner });
 
-    // loom.json exists and compiles
+    // config-loom.json exists and compiles
     const { config } = await loadConfig(root);
     expect(config.files['tsconfig.json']).toBeDefined();
     expect(config.files['eslint.config.mjs']).toBeDefined();
@@ -118,14 +118,14 @@ describe('loom init', () => {
       'front',
     );
 
-    // git: files untracked + gitignore block present; loom.json itself stays committable
+    // git: files untracked + gitignore block present; config-loom.json itself stays committable
     const { stdout: ls } = await run('git', ['ls-files'], { cwd: root });
     expect(ls).not.toContain('tsconfig.json');
     expect(ls).not.toContain('eslint.config.mjs');
     const { stdout: status } = await run('git', ['status', '--porcelain'], {
       cwd: root,
     });
-    expect(status).toContain('?? loom.json'); // not ignored by the block
+    expect(status).toContain('?? config-loom.json'); // not ignored by the block
     const gitignore = await getRel(root, '.gitignore');
     expect(gitignore).toContain(GITIGNORE_BEGIN);
     expect(gitignore).toContain('apps/api/tsconfig.json');
@@ -157,10 +157,10 @@ describe('loom init', () => {
     expect(before).toBe('');
     await initRepo(root, { dryRun: true, runner: fakePnpmRunner });
     expect(await git(root, 'status', '--porcelain')).toBe('');
-    await expect(getRel(root, 'loom.json')).rejects.toThrow();
+    await expect(getRel(root, 'config-loom.json')).rejects.toThrow();
   });
 
-  it('refuses to overwrite an existing loom.json without --force', async () => {
+  it('refuses to overwrite an existing config-loom.json without --force', async () => {
     const root = await makeScatteredRepo();
     await initRepo(root, { yes: true, runner: fakePnpmRunner });
     await expect(
@@ -171,7 +171,7 @@ describe('loom init', () => {
       force: true,
       runner: fakePnpmRunner,
     });
-    expect(result.configPath).toContain('loom.json');
+    expect(result.configPath).toContain('config-loom.json');
   });
 
   it('excludes unparsable files from the template but still manages the path', async () => {

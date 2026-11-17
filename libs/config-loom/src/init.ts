@@ -64,7 +64,7 @@ export interface InitOptions {
   files?: string[];
   /** Leave existing files on disk (they will just be overwritten by sync). */
   keep?: boolean;
-  /** Overwrite an existing loom.json. */
+  /** Overwrite an existing config-loom.json. */
   force?: boolean;
   dryRun?: boolean;
   yes?: boolean;
@@ -74,7 +74,7 @@ export interface InitOptions {
 
 export interface ClusterInfo {
   file: string;
-  /** Rule key written to loom.json (or the literal word `default`). */
+  /** Rule key written to config-loom.json (or the literal word `default`). */
   pattern: string;
   members: string[];
   kind: 'default' | 'delta' | 'full';
@@ -355,7 +355,7 @@ async function ask(question: string): Promise<string> {
 }
 
 /**
- * Full init flow: build the plan, write loom.json, drop the scattered
+ * Full init flow: build the plan, write config-loom.json, drop the scattered
  * originals from git and disk, add them to .gitignore and regenerate
  * everything with sync.
  */

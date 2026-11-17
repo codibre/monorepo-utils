@@ -28,7 +28,7 @@ export type FileFormat = 'json' | 'jsonc' | 'text';
 export type ArrayPolicy = 'replace' | 'concat' | 'unique';
 
 /**
- * One generated file, as written in loom.json before compilation.
+ * One generated file, as written in config-loom.json before compilation.
  */
 export interface FileSpecInput {
   format?: FileFormat;
@@ -43,7 +43,7 @@ export interface FileSpecInput {
 }
 
 /**
- * loom.json as read from disk (comments allowed).
+ * config-loom.json as read from disk (comments allowed).
  */
 export interface LoomConfigInput {
   /** Globs of workspace directories to skip entirely. */

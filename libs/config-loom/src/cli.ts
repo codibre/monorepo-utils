@@ -16,7 +16,7 @@ Usage:
   config-loom <command> [options]
 
 Commands:
-  init        Reverse-engineer loom.json from the config files scattered
+  init        Reverse-engineer config-loom.json from the config files scattered
               across workspaces, then delete them, gitignore them and
               regenerate them (use --dry-run to preview).
   sync        Generate every managed file (creates/updates only what changed).
@@ -26,11 +26,11 @@ Commands:
 
 Options:
   --root <dir>        Repository root (default: cwd)
-  --config <path>     loom.json path (default: <root>/loom.json)
+  --config <path>     config-loom.json path (default: <root>/config-loom.json)
   --files <a,b,...>   [init] only these file names (default: scan known ones)
   --dry-run           Print what would happen; change nothing
   --keep              [init] leave existing files on disk (sync overwrites)
-  --force             [init] overwrite an existing loom.json
+  --force             [init] overwrite an existing config-loom.json
   --yes               Skip the confirmation prompt
   --verbose           Also list unchanged files
   -h, --help          Same as 'help'
@@ -39,18 +39,12 @@ Options:
 Requires a pnpm workspace at the repo root: workspaces come from
   'pnpm -r exec pwd' (other package managers may come later).
 
-Turbo wiring (install as a root devDependency, then):
-  package.json  "scripts": { "config-loom": "config-loom sync" }
-  turbo.json    "tasks": {
-                  "//#config-loom": {
-                    "inputs": ["loom.json", "pnpm-workspace.yaml"],
-                    "outputs": ["apps/*/tsconfig.json", "libs/*/tsconfig.json"]
-                  },
-                  "build": { "dependsOn": ["//#config-loom", "^build"] }
-                }
+Wiring (install as a root devDependency, then one line in package.json):
+  "scripts": { "postinstall": "config-loom sync" }
 
-Every turbo command regenerates the managed files first — from turbo's
-cache when loom.json did not change, so the cost is zero.
+Every pnpm install regenerates the managed files — fresh clones, CI, IDE.
+Optional Turborepo upgrade: a cached //#config-loom root task that
+build/test/lint depend on (see README).
 `;
 
 interface Flags {
@@ -193,7 +187,7 @@ export async function main(
         }
         if (flags.dryRun) {
           console.log(
-            `# loom.json that init would write to ${result.configPath}:`,
+            `# config-loom.json that init would write to ${result.configPath}:`,
           );
           process.stdout.write(serializeConfig(result.plan.config));
           console.log(
@@ -213,7 +207,7 @@ export async function main(
           printSync(result.sync, flags.verbose);
         }
         console.log(
-          'next: wire config-loom — root devDependency + script "config-loom": "config-loom sync" + the //#config-loom task in turbo.json that build/test/lint depend on (see README)',
+          'next: add "postinstall": "config-loom sync" to the root package.json so every install regenerates the managed files (see README)',
         );
         return 0;
       }

@@ -15,7 +15,7 @@ A 50-package monorepo rots the same way: every `tsconfig.json` starts as a
 copy-paste, then one "quick fix" at a time turns fifty identical files into
 fifty snowflakes. Nobody reviews those diffs; they are invisible debt.
 
-**config-loom** keeps one template file — `loom.json` — in git, and
+**config-loom** keeps one template file — `config-loom.json` — in git, and
 generates every per-project config file from it:
 
 ```jsonc
@@ -47,7 +47,7 @@ no more someone hand-editing a generated file.
 
 ```sh
 pnpm add -D -w @codibre/config-loom  # once: root devDependency
-pnpm exec config-loom init           # reverse-engineers loom.json from your existing configs
+pnpm exec config-loom init           # reverse-engineers config-loom.json from your existing configs
 pnpm exec config-loom sync           # (re)generate everything
 pnpm exec config-loom check          # CI gate: fail if anything drifted
 ```
@@ -78,8 +78,8 @@ pnpm add -D -w @codibre/config-loom
 ### 2. Run init
 
 ```sh
-pnpm exec config-loom init --dry-run   # preview: shows the loom.json it would write
-pnpm exec config-loom init             # writes loom.json, deletes the scattered files,
+pnpm exec config-loom init --dry-run   # preview: shows the config-loom.json it would write
+pnpm exec config-loom init             # writes config-loom.json, deletes the scattered files,
                               # git-rms them from the index, adds the .gitignore block
 ```
 
@@ -91,56 +91,52 @@ possible (`libs/.*-application`), or as exact `apps/bff|apps/other`
 alternations — for each exception. Use `--files tsconfig.json,eslint.config.mjs`
 to restrict the scope.
 
-### 3. Wire Turborepo
-
-Turborepo has no plugin API, so integration is **one root task** that every
-other task depends on. A turbo task is just a name bound to a root
-`package.json` script, so the complete wiring is:
+### 3. Wire it up — one line
 
 ```jsonc
 // package.json (root)
 {
   "scripts": {
-    // the root script that the //#config-loom task runs
-    "config-loom": "config-loom sync",
+    "postinstall": "config-loom sync",
   },
 }
 ```
 
+That is the whole integration. `pnpm install` — fresh clone, CI runner, or a
+Tuesday afternoon pull — regenerates every managed file, and the files are on
+disk before anything else runs (TS server included). It is task-runner
+agnostic: works with npm/yarn/pnpm scripts, Turborepo, moon, or no runner at
+all. Add a CI gate with a second script, since `check` never writes:
+
 ```jsonc
-// turbo.json
+"check:configs": "config-loom check"
+```
+
+**Optional Turborepo upgrade.** Turbo has no plugin API, but you can also
+declare a root task so every turbo command re-syncs first, cache-guarded —
+useful when installs run with `--ignore-scripts`, or when you want drift
+caught between commands rather than only at install time:
+
+```jsonc
+// turbo.json — also add script "config-loom": "config-loom sync"
 {
   "tasks": {
     "//#config-loom": {
-      "inputs": ["loom.json", "pnpm-workspace.yaml"],
-      "outputs": [
-        "apps/*/tsconfig.json",
-        "libs/*/tsconfig.json",
-        "apps/*/eslint.config.mjs",
-      ],
+      "inputs": ["config-loom.json", "pnpm-workspace.yaml"],
+      "outputs": ["apps/*/tsconfig.json", "libs/*/tsconfig.json"],
       "cache": true,
     },
     "build": { "dependsOn": ["//#config-loom", "^build"] },
     "test": { "dependsOn": ["//#config-loom"] },
-    "lint": { "dependsOn": ["//#config-loom"] },
   },
 }
 ```
 
-That is the whole integration: `pnpm i && pnpm build` on a fresh clone
-generates everything, and every later turbo command regenerates first — from
-turbo's cache when `loom.json` hasn't changed, so the cost is zero.
 Declare **every** generated file in `outputs`: on a cache hit turbo restores
-exactly those paths, which is what makes the gitignored files reappear on a
-fresh CI checkout without running the generator.
+exactly those paths. With the postinstall wiring you don't need this to make
+gitignored files reappear — install already does.
 
-Also handy as a CI gate (`config-loom check` never writes):
-
-```jsonc
-"config-loom:check": { "cache": false }  // + script "config-loom:check": "config-loom check"
-```
-
-## `loom.json` reference
+## `config-loom.json` reference
 
 Top level:
 
@@ -183,19 +179,17 @@ Rule semantics:
 ### What can never be generated
 
 `package.json`, lockfiles, `pnpm-workspace.yaml`, `turbo.json`, `.gitignore`,
-`.npmrc` and `loom.*` itself: pnpm resolves the workspace from
+`.npmrc` and `config-loom.*` itself: pnpm resolves the workspace from
 `package.json`, so template-generating it would undermine the tool itself.
 Use [manypkg](https://github.com/trymanypkg/manypkg)/Syncpack for package.json
 drift, and [pnpm catalog](https://pnpm.io/catalogs) for dependency versions.
 
 ## The `.gitignore` trade-off (read this)
 
-Generated files being gitignored means a fresh clone only has them after the
-first turbo command. If someone opens the IDE before building, the TS server
-sees missing tsconfigs — the habit that fixes it is the one you already have:
-build right after `pnpm install`. You can additionally wire
-`"postinstall": "config-loom sync"` to close the gap entirely, and
-`config-loom check` in CI is the safety net either way. If gitignoring is
+Generated files being gitignored means they exist only where the tool has
+run. The `postinstall` wiring above closes that gap by construction — every
+`pnpm install` regenerates before any developer or CI job touches the tree —
+and `config-loom check` in CI is the safety net. If gitignoring is still
 unacceptable for your workflow, don't let init touch git: run
 `config-loom init --keep --dry-run`, adapt the config, and commit the
 generated files as normal artifacts (`check` still polices them).
@@ -205,26 +199,25 @@ generated files as normal artifacts (`check` still polices them).
 ```
 config-loom <command> [options]
 
-  init     Reverse-engineer loom.json from the configs scattered across
+  init     Reverse-engineer config-loom.json from the configs scattered across
            workspaces; delete, gitignore and regenerate them.
   sync     Generate every managed file (creates/updates only what changed).
   check    Exit 1 if any managed file is missing or stale. Never writes.
 
   --root <dir>       repository root (default cwd)
-  --config <path>    loom.json path (default <root>/loom.json)
+  --config <path>    config-loom.json path (default <root>/config-loom.json)
   --files a,b,...    [init] restrict to these file names
   --dry-run          preview, change nothing
   --keep             [init] don't delete existing files
-  --force            [init] overwrite an existing loom.json
+  --force            [init] overwrite an existing config-loom.json
   --yes              skip the confirmation prompt
   --verbose          also list unchanged files
 ```
 
-> **Naming notes.** The binary is `config-loom` only — this package
-> deliberately does **not** ship a `loom` alias, which belongs to
-> [@loom/core](https://loomjs.com). Prefer `pnpm exec config-loom …`
-> over `pnpm config-loom …`: once the wiring script exists, the bare form
-> runs the script (`sync`) and appends your arguments to it.
+> **Naming note.** The binary is `config-loom` only — no bare `loom` alias,
+> since that name is taken on npm and Loom owns it in search results. Run it
+> with `pnpm exec config-loom …` (or `pnpm config-loom …` when no script
+> shadows the name).
 
 ## Programmatic API
 
