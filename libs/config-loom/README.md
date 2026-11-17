@@ -7,7 +7,7 @@
   />
 </p>
 
-# @codibre/config-loom
+# config-loom
 
 > Eliminate config drift in pnpm + Turborepo monorepos.
 
