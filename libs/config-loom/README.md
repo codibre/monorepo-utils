@@ -7,7 +7,6 @@
   />
 </p>
 
-
 # config-loom
 
 > Eliminate config drift in pnpm + Turborepo monorepos.
@@ -87,9 +86,16 @@ pnpm exec config-loom init             # writes config-loom.jsonc, deletes the s
 `init` asks pnpm itself which projects exist (`pnpm -r exec pwd`), scans every workspace for known config
 files (`tsconfig.json`, `eslint.config.mjs`, `vitest.config.mts`,
 `jest.config.js`, `nest-cli.json`, …), clusters them by content, takes the
-majority content as `default`, and emits delta rules — grouped as regexes when
-possible (`libs/.*-application`), or as exact `apps/bff|apps/other`
-alternations — for each exception. Use `--files tsconfig.json,eslint.config.mjs`
+majority content as `default`, and emits delta rules for each exception. Rule
+keys are synthesized to stay short and future-proof instead of enumerating
+paths: naming families (`libs/.*-application`), whole directories
+(`apps/.*`), a directory minus a few siblings (`libs/adapters/(?!legacy-sql$|old-auth$).*`),
+and per-directory composites for clusters spanning several folders
+(`apps/.*|libs/(?:domain/x|shared/(?:a|b))`). Every candidate is validated
+against the current workspace set — a key never over-matches today — and the
+directory-shaped ones keep matching tomorrow, when a new project joins the
+folder. Only when nothing collapses does a key fall back to the exact
+`apps/bff|apps/other` alternation. Use `--files tsconfig.json,eslint.config.mjs`
 to restrict the scope.
 
 ### 3. Wire it up — one line (init does it for you)
