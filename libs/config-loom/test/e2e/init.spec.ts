@@ -12,6 +12,8 @@ import {
   tsConfig,
 } from '../helpers';
 import { parseJsonc } from '../../src/jsonc';
+import { parse as parseYaml } from 'yaml';
+import type { LoomConfigInput } from '../../src/types';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -74,11 +76,10 @@ describe('loom init', () => {
     });
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
-    const keys = Object.keys(spec.rules);
-    expect(keys[0]).toBe('default');
     // default covers the 5 identical ones; one delta rule for libs/ui
-    expect(keys).toHaveLength(2);
-    expect(spec.rules['default']).toMatchObject({
+    expect(spec.rules ?? []).toHaveLength(1);
+    expect(spec.rules?.[0]?.pattern).toBe('libs/ui');
+    expect(spec.default).toMatchObject({
       compilerOptions: { target: 'es2023' },
     });
     const cluster = plan.clusters.find((c) => c.kind === 'delta');
@@ -91,7 +92,7 @@ describe('loom init', () => {
     const root = await makeScatteredRepo();
     const result = await initRepo(root, { yes: true, runner: fakePnpmRunner });
 
-    // config-loom.json exists and compiles
+    // config-loom.yaml exists and compiles
     const { config } = await loadConfig(root);
     expect(config.files['tsconfig.json']).toBeDefined();
     expect(config.files['eslint.config.mjs']).toBeDefined();
@@ -119,14 +120,14 @@ describe('loom init', () => {
       'front',
     );
 
-    // git: files untracked + gitignore block present; config-loom.json itself stays committable
+    // git: files untracked + gitignore block present; config-loom.yaml itself stays committable
     const { stdout: ls } = await run('git', ['ls-files'], { cwd: root });
     expect(ls).not.toContain('tsconfig.json');
     expect(ls).not.toContain('eslint.config.mjs');
     const { stdout: status } = await run('git', ['status', '--porcelain'], {
       cwd: root,
     });
-    expect(status).toContain('?? config-loom.json'); // not ignored by the block
+    expect(status).toContain('?? config-loom.yaml'); // not ignored by the block
     const gitignore = await getRel(root, '.gitignore');
     expect(gitignore).toContain(GITIGNORE_BEGIN);
     // wildcard-first: pnpm workspace globs widened over the managed file
@@ -155,10 +156,10 @@ describe('loom init', () => {
     if (!spec) throw new Error('missing entry');
     // Majority flavor becomes the default; the minority keeps a rule; the
     // workspaces without the file collapse into an exclude family.
-    expect(spec.rules.default).toBe(
+    expect(spec.default).toBe(
       "export { default } from '@repo/eslint-config';\n",
     );
-    expect(Object.keys(spec.rules)).toHaveLength(2); // default + front flavor
+    expect(spec.rules ?? []).toHaveLength(1); // the front flavor
     expect(spec.exclude).toEqual(['apps/api|apps/web', 'libs/.*']);
 
     // file placement: only the two present workspaces ever get the file
@@ -190,12 +191,12 @@ describe('loom init', () => {
     if (!spec) throw new Error('missing entry');
     // the workspace that lacks the file becomes a hard exclude, so every
     // remaining workspace (including future ones) inherits a real default
-    expect(spec.rules.default).toMatchObject({
+    expect(spec.default).toMatchObject({
       compilerOptions: { target: 'es2023' },
       include: ['src'],
     });
     expect(spec.exclude).toEqual(['libs/ui']);
-    expect(Object.values(spec.rules).includes(null)).toBe(false);
+    expect((spec.rules ?? []).some((rule) => rule.value === null)).toBe(false);
 
     await initRepo(root, {
       yes: true,
@@ -237,9 +238,9 @@ describe('loom init', () => {
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
     // 5 scattered singletons are not a family: opt-in, not an exclude list
-    expect(spec.rules.default).toBeNull();
+    expect(spec.default).toBeNull();
     expect(spec.exclude).toBeUndefined();
-    expect(Object.keys(spec.rules)).toEqual(['default', 'apps/x1']);
+    expect((spec.rules ?? []).map((rule) => rule.pattern)).toEqual(['apps/x1']);
   });
 
   it('dry-run changes nothing', async () => {
@@ -248,10 +249,10 @@ describe('loom init', () => {
     expect(before).toBe('');
     await initRepo(root, { dryRun: true, runner: fakePnpmRunner });
     expect(await git(root, 'status', '--porcelain')).toBe('');
-    await expect(getRel(root, 'config-loom.json')).rejects.toThrow();
+    await expect(getRel(root, 'config-loom.yaml')).rejects.toThrow();
   });
 
-  it('refuses to overwrite an existing config-loom.json without --force', async () => {
+  it('refuses to overwrite an existing config without --force', async () => {
     const root = await makeScatteredRepo();
     await initRepo(root, { yes: true, runner: fakePnpmRunner });
     await expect(
@@ -262,7 +263,7 @@ describe('loom init', () => {
       force: true,
       runner: fakePnpmRunner,
     });
-    expect(result.configPath).toContain('config-loom.json');
+    expect(result.configPath).toContain('config-loom.yaml');
   });
 
   it('excludes unparsable files from the template but still manages the path', async () => {
@@ -341,11 +342,29 @@ describe('loom init', () => {
     expect(rootTask?.dependsOn).toBeUndefined();
   });
 
-  it('serializeConfig emits commented JSONC that compiles back', () => {
+  it('serializeConfig emits YAML with a spec-level default that compiles back', () => {
     const text = serializeConfig({
-      files: { 'tsconfig.json': { rules: { default: { a: 1 } } } },
+      files: {
+        'tsconfig.json': {
+          default: { a: 1 },
+          rules: [{ pattern: 'libs/x', value: { b: 2 } }],
+        },
+      },
     });
-    expect(text.startsWith('// Managed by config-loom')).toBe(true);
+    expect(text.startsWith('# Managed by config-loom')).toBe(true);
+    const data = parseYaml(text) as {
+      files: Record<
+        string,
+        {
+          default?: unknown;
+          rules?: Array<{ pattern: string; value: unknown }>;
+        }
+      >;
+    };
+    const entry = data.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.default).toEqual({ a: 1 });
+    expect(entry.rules).toEqual([{ pattern: 'libs/x', value: { b: 2 } }]);
   });
 });
 
@@ -394,15 +413,15 @@ describe('loom init tsconfig intelligence (issue #5)', () => {
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
     // Only the genuine difference (no `exclude`) survives in the rule.
-    expect(spec.rules).toEqual({
-      default: {
-        extends: '@monorepo/config/typescript/tsconfig.json',
-        compilerOptions: { outDir: './dist', rootDir: './src' },
-        include: ['src/**/*'],
-        exclude: ['node_modules', 'dist'],
-      },
-      'libs/delta': { exclude: null },
+    expect(spec.default).toEqual({
+      extends: '@monorepo/config/typescript/tsconfig.json',
+      compilerOptions: { outDir: './dist', rootDir: './src' },
+      include: ['src/**/*'],
+      exclude: ['node_modules', 'dist'],
     });
+    expect(spec.rules).toEqual([
+      { pattern: 'libs/delta', value: { exclude: null } },
+    ]);
 
     // The variant folds into the default spelling (`./dist` ≡ `dist`),
     // keeping only its real difference: no `exclude`.
@@ -419,5 +438,96 @@ describe('loom init tsconfig intelligence (issue #5)', () => {
     expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
       true,
     );
+  });
+});
+
+describe('loom init YAML wire (pattern prop)', () => {
+  it('writes rules as a { pattern, value } list with block scalars for text', async () => {
+    const root = await makeScatteredRepo();
+    await initRepo(root, { yes: true, runner: fakePnpmRunner });
+    const text = await getRel(root, 'config-loom.yaml');
+    expect(text.startsWith('# Managed by config-loom.')).toBe(true);
+    const data = parseYaml(text) as {
+      files: Record<
+        string,
+        {
+          default?: unknown;
+          rules?: Array<{ pattern: string; value: unknown }>;
+        }
+      >;
+    };
+    const eslintEntry = data.files['eslint.config.mjs'];
+    const tsEntry = data.files['tsconfig.json'];
+    if (!eslintEntry || !tsEntry) throw new Error('missing entry');
+    // `default` is a spec property above `rules`, never a pattern.
+    expect(typeof eslintEntry.default).toBe('string');
+    expect(typeof tsEntry.default).toBe('object');
+    expect(
+      (tsEntry.rules ?? []).some((rule) => rule.pattern === 'default'),
+    ).toBe(false);
+    expect(tsEntry.rules?.[0]?.pattern).toBe('libs/ui');
+    // the text default renders as a plain YAML block scalar
+    expect(text).toMatch(/default: [-|]/);
+  });
+
+  it('converts a legacy config-loom.json to config-loom.yaml on --force', async () => {
+    const root = await makeScatteredRepo();
+    await putFile(root, 'config-loom.json', '// stale\n{ "files": {} }\n');
+    await git(root, 'add', 'config-loom.json');
+    await git(root, 'commit', '-m', 'legacy loom');
+    const result = await initRepo(root, {
+      yes: true,
+      force: true,
+      runner: fakePnpmRunner,
+    });
+    expect(result.configPath).toContain('config-loom.yaml');
+    await expect(getRel(root, 'config-loom.json')).rejects.toThrow();
+    const status = await git(root, 'status', '--porcelain');
+    expect(status).toMatch(/^D {1,2}config-loom\.json$/m);
+    // the YAML config actually drives generation
+    expect(await getRel(root, 'apps/api/tsconfig.json')).toContain(
+      'compilerOptions',
+    );
+    const { config } = await loadConfig(root);
+    expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
+  });
+
+  it('serializeConfig round-trips through loadConfig', async () => {
+    const root = await makeTempDir();
+    const config: LoomConfigInput = {
+      files: {
+        'tsconfig.json': {
+          format: 'jsonc',
+          arrays: 'replace',
+          default: { compilerOptions: { strict: true } },
+          rules: [
+            {
+              pattern: 'libs/.*',
+              value: { compilerOptions: { composite: null } },
+            },
+          ],
+        },
+        'eslint.config.mjs': {
+          format: 'text',
+          arrays: 'replace',
+          default: "import a from 'a';\nexport default a;\n",
+          rules: [{ pattern: 'apps/x', value: null }],
+        },
+      },
+    };
+    await putFile(root, 'config-loom.yaml', serializeConfig(config));
+    const { config: loaded } = await loadConfig(root);
+    const ts = loaded.files['tsconfig.json'];
+    const es = loaded.files['eslint.config.mjs'];
+    if (!ts || !es) throw new Error('missing entry');
+    expect(ts.defaultValue).toEqual({ compilerOptions: { strict: true } });
+    expect(ts.rules[0]).toMatchObject({
+      pattern: 'libs/.*',
+      value: { compilerOptions: { composite: null } },
+    });
+    expect(es.defaultValue).toBe("import a from 'a';\nexport default a;\n");
+    expect(es.rules[0]?.value).toBeNull();
   });
 });

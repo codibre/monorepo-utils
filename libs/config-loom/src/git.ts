@@ -53,7 +53,7 @@ export function buildGitignoreBlock(patterns: string[]): string {
     GITIGNORE_BEGIN,
     '# Patterns synthesized by `config-loom init` from the pnpm workspace',
     '# globs; wildcards are intentional so new projects are covered without',
-    "# editing this file. Hand-edit config-loom.jsonc; 'config-loom init",
+    "# editing this file. Hand-edit config-loom.yaml; 'config-loom init",
     '# --force' + "' regenerates the block.",
   ];
   return `${header.join('\n')}\n${body.join('\n')}\n${GITIGNORE_END}\n`;

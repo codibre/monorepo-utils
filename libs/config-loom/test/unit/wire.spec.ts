@@ -69,7 +69,7 @@ describe('wireRepo', () => {
       turboText.includes('//') ? stripComments(turboText) : turboText,
     );
     expect(turbo.tasks['//#config-loom']).toEqual({
-      inputs: ['config-loom.jsonc', 'config-loom.json', 'pnpm-workspace.yaml'],
+      inputs: ['config-loom.yaml', 'config-loom.yml', 'pnpm-workspace.yaml'],
       outputs: ['apps/**/tsconfig.json'],
       cache: true,
     });

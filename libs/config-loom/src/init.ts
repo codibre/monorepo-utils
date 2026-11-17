@@ -4,6 +4,7 @@ import {
   defaultFormatFor,
 } from './config';
 import { computeDelta, tsconfigEqual } from './diff';
+import { stringify } from 'yaml';
 import { LoomError } from './errors';
 import {
   isGitRepo,
@@ -77,7 +78,7 @@ export interface InitOptions {
   files?: string[];
   /** Leave existing files on disk (they will just be overwritten by sync). */
   keep?: boolean;
-  /** Overwrite an existing config-loom.json. */
+  /** Overwrite an existing config (a legacy JSON one is converted to config-loom.yaml). */
   force?: boolean;
   dryRun?: boolean;
   yes?: boolean;
@@ -909,7 +910,19 @@ export async function buildPlan(
       }
     }
 
-    const spec: FileSpecInput = { format, arrays: 'replace', rules };
+    // `default` is emitted as a spec property ABOVE `rules` — never as a
+    // pattern — so a workspace folder literally named `default` can be
+    // matched by a rule.
+    const spec: FileSpecInput = {
+      format,
+      arrays: 'replace',
+      ...(Object.prototype.hasOwnProperty.call(rules, 'default')
+        ? { default: rules['default'] ?? null }
+        : {}),
+      rules: Object.entries(rules)
+        .filter(([pattern]) => pattern !== 'default')
+        .map(([pattern, value]) => ({ pattern, value })),
+    };
     if (fileExclude && fileExclude.length > 0) {
       spec.exclude = fileExclude;
     }
@@ -971,22 +984,75 @@ export async function buildPlan(
 
 export function serializeConfig(config: LoomConfigInput): string {
   const header = [
-    '// Managed by config-loom.',
-    '// Rule keys are regular expressions matched (full match) against the',
-    '// workspace directory path. Order matters: rules merge top to bottom,',
-    '// later rules win (specific props beat `default`), and a rule whose',
-    '// value is null opts its matches out of the file. A null INSIDE a rule',
-    '// value removes an inherited key (JSON Merge Patch, RFC 7386). A',
-    '// per-file "exclude" list is a hard opt-out beating default and rules.',
-    '// Prefer directory-shaped keys (apps/[^/]+, libs/foo-.*) so new',
-    '// projects joining a shape need no edit here.',
-    "// After editing, run 'config-loom sync' (or any turbo command, once wired).",
+    '# Managed by config-loom.',
+    '# `default:` (above `rules`) is the base content every matching',
+    '# workspace starts from; `default: null` makes the entry opt-in (only',
+    '# workspaces hit by a rule get the file). Each rule is a `pattern` (a',
+    '# regular expression matched full against the workspace directory',
+    '# path) and a `value`. Order matters: rules merge over default and',
+    '# each other, top to bottom, later rules win; a rule whose value is',
+    '# null opts its matches out of the file. A null INSIDE a rule value',
+    '# removes an inherited key (JSON Merge Patch, RFC 7386). A per-file',
+    '# "exclude" list is a hard opt-out beating default and rules.',
+    '# Prefer directory-shaped patterns (apps/.*, libs/foo-.*) so new',
+    '# projects joining a shape need no edit here. Instead of an inline',
+    '# value, `template: <repo-relative path>` pulls content from a file',
+    '# (multiline text or commented JSONC). Multiline inline values use',
+    '# plain YAML block scalars.',
+    "# After editing, run 'config-loom sync' (or any turbo command, once wired).",
   ].join('\n');
-  return `${header}\n${JSON.stringify(config, null, 2)}\n`;
+  const files: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(config.files)) {
+    const out: Record<string, unknown> = {};
+    if (spec.format !== undefined) {
+      out.format = spec.format;
+    }
+    if (spec.arrays !== undefined) {
+      out.arrays = spec.arrays;
+    }
+    if (spec.banner !== undefined) {
+      out.banner = spec.banner;
+    }
+    if (spec.default !== undefined) {
+      out.default = spec.default;
+    }
+    if (spec.rules !== undefined && spec.rules.length > 0) {
+      out.rules = spec.rules.map((rule) => ({
+        pattern: rule.pattern,
+        value: rule.value ?? null,
+      }));
+    }
+    if (spec.exclude !== undefined) {
+      out.exclude = spec.exclude;
+    }
+    files[name] = out;
+  }
+  const wire: Record<string, unknown> = {};
+  if (config.exclude && config.exclude.length > 0) {
+    wire.exclude = config.exclude;
+  }
+  wire.files = files;
+  return `${header}\n${stringify(wire, { lineWidth: 0, indent: 2 })}`;
 }
 
 async function findExistingConfig(root: string): Promise<string | null> {
   for (const name of DEFAULT_CONFIG_FILENAMES) {
+    const candidate = path.join(root, name);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+/** Pre-YAML JSON configs: no longer read, only removed by init (conversion). */
+const LEGACY_CONFIG_NAMES = ['config-loom.jsonc', 'config-loom.json'];
+
+async function findLegacyConfig(root: string): Promise<string | null> {
+  for (const name of LEGACY_CONFIG_NAMES) {
     const candidate = path.join(root, name);
     try {
       await access(candidate);
@@ -1009,7 +1075,8 @@ async function ask(question: string): Promise<string> {
 }
 
 /**
- * Full init flow: build the plan, write config-loom.json, drop the scattered
+ * Full init flow: build the plan, write config-loom.yaml (converting a
+ * legacy JSON config), drop the scattered
  * originals from git and disk, add them to .gitignore and regenerate
  * everything with sync.
  */
@@ -1018,15 +1085,18 @@ export async function initRepo(
   opts: InitOptions = {},
 ): Promise<InitResult> {
   const existing = await findExistingConfig(root);
-  if (existing && !opts.force && !opts.dryRun) {
+  const legacy = existing === null ? await findLegacyConfig(root) : null;
+  const occupied = existing ?? legacy;
+  if (occupied && !opts.force && !opts.dryRun) {
     throw new LoomError(
-      `${existing} already exists — re-run with --force to overwrite it`,
+      `${occupied} already exists — re-run with --force to overwrite it (a legacy JSON config is converted to YAML)`,
     );
   }
   const plan = await buildPlan(root, opts);
   const globs = opts.globs ?? (await readWorkspaceGlobs(root));
-  const configPath =
-    existing ?? path.join(root, DEFAULT_CONFIG_FILENAMES[0] as string);
+  // The canonical name is always the YAML one; a legacy JSON config found
+  // on disk is converted (rewritten below, then removed).
+  const configPath = path.join(root, DEFAULT_CONFIG_FILENAMES[0] as string);
 
   if (opts.dryRun) {
     const gitRepo = await isGitRepo(root);
@@ -1064,6 +1134,11 @@ export async function initRepo(
   }
 
   await writeFile(configPath, serializeConfig(plan.config), 'utf8');
+  // Conversion: drop the legacy JSON config once the YAML one is in place.
+  const legacyRel = legacy === null ? null : path.relative(root, legacy);
+  if (legacyRel !== null) {
+    await unlink(legacy as string).catch(() => undefined);
+  }
 
   const gitRepo = await isGitRepo(root);
   let untracked: string[] = [];
@@ -1071,6 +1146,9 @@ export async function initRepo(
   if (gitRepo) {
     const tracked = await listTrackedFiles(root);
     untracked = plan.managedFiles.filter((file) => tracked.has(file));
+    if (legacyRel !== null && tracked.has(legacyRel)) {
+      untracked = [...untracked, legacyRel];
+    }
     await untrackFiles(root, untracked);
     ignorePatterns = synthesizeIgnoreList(plan.managedEntries, globs, tracked);
     await updateGitignoreBlock(root, ignorePatterns);

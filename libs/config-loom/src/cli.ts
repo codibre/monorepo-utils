@@ -17,7 +17,7 @@ Usage:
   config-loom <command> [options]
 
 Commands:
-  init        Reverse-engineer config-loom.jsonc from the config files scattered
+  init        Reverse-engineer config-loom.yaml from the config files scattered
               across workspaces, then delete them, gitignore them and
               regenerate them (use --dry-run to preview).
   sync        Generate every managed file (creates/updates only what changed).
@@ -30,7 +30,7 @@ Commands:
 
 Options:
   --root <dir>        Repository root (default: cwd)
-  --config <path>     config file path (default: <root>/config-loom.jsonc)
+  --config <path>     config file path (default: <root>/config-loom.yaml)
   --files <a,b,...>   [init] only these file names (default: scan known ones)
   --dry-run           Print what would happen; change nothing
   --keep              [init] leave existing files on disk (sync overwrites)
@@ -215,6 +215,7 @@ export async function main(
         const report = await wireRepo(root, {
           outputs: deriveOutputs(workspaces, Object.keys(config.files)),
           dryRun: flags.dryRun,
+          configPath: flags.config,
         });
         printWire(report);
         if (flags.dryRun) {

@@ -28,20 +28,47 @@ export type FileFormat = 'json' | 'jsonc' | 'text';
 export type ArrayPolicy = 'replace' | 'concat' | 'unique';
 
 /**
- * One generated file, as written in config-loom.json before compilation.
+ * One rule as written in config-loom.yaml: a `pattern` prop plus its
+ * `value`. A pattern is a regular expression matched (anchored, full match)
+ * against the workspace directory path relative to the repo root, e.g.
+ * `libs/.*-application`. It matches directories literally, so a pattern of
+ * `default` matches a workspace folder named `default` — the base content
+ * is the sibling `default` property of the file spec, never a pattern.
+ * A `value` of `null` (or absent) opts the matched workspaces out of the
+ * file (only meaningful when a `default` exists). Instead of an inline
+ * `value`, a rule may carry `template`: a repo-relative path whose file
+ * content becomes the value (handy when the content is a big script).
+ */
+export interface RuleInput {
+  pattern: string;
+  value?: JsonValue | string | null;
+  /** Repo-relative template file; mutually exclusive with `value`. */
+  template?: string | null;
+}
+
+/**
+ * One generated file, as written in config-loom.yaml before compilation.
  */
 export interface FileSpecInput {
   format?: FileFormat;
   arrays?: ArrayPolicy;
   banner?: string | boolean;
   /**
-   * Insertion-ordered map of `default` + regex patterns to content.
-   * Regex keys are matched (anchored, full-match) against the workspace
-   * directory path relative to the repo root, e.g. `libs/.*-application`.
-   * A rule value of `null` opts the matched workspaces out of the file
-   * (only meaningful when `default` is set).
+   * Base content every matching workspace starts from. `null` (or absent)
+   * makes the entry opt-in: only workspaces hit by a non-null rule get the
+   * file. Instead of an inline value, a spec may carry `template`: a
+   * repo-relative path whose file content becomes the default (mutually
+   * exclusive with `default`).
    */
-  rules: Record<string, JsonValue | string | null>;
+  default?: JsonValue | string | null;
+  /** Repo-relative template file for `default`; resolved by loadConfig. */
+  template?: string | null;
+  /**
+   * Ordered list of `{ pattern, value }` rules, merged over `default` and
+   * each other — later rules win (specific props beat `default`). A rule
+   * value of `null` opts its matches out of the file.
+   */
+  rules?: RuleInput[];
   /**
    * Regular expressions (same syntax as rule keys, full match against the
    * workspace directory) for workspaces that must NEVER receive this file.
@@ -54,7 +81,7 @@ export interface FileSpecInput {
 }
 
 /**
- * config-loom.json as read from disk (comments allowed).
+ * config-loom.yaml as read from disk (comments allowed).
  */
 export interface LoomConfigInput {
   /** Globs of workspace directories to skip entirely. */

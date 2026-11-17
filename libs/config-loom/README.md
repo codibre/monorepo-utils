@@ -15,29 +15,23 @@ A 50-package monorepo rots the same way: every `tsconfig.json` starts as a
 copy-paste, then one "quick fix" at a time turns fifty identical files into
 fifty snowflakes. Nobody reviews those diffs; they are invisible debt.
 
-**config-loom** keeps one template file — `config-loom.jsonc` — in git, and
+**config-loom** keeps one template file — `config-loom.yaml` — in git, and
 generates every per-project config file from it:
 
-```jsonc
-{
-  "files": {
-    "tsconfig.json": {
-      "rules": {
-        // everything starts here
-        "default": {
-          "compilerOptions": { "target": "es2023", "strict": true },
-          "include": ["src"],
-        },
-        // regex keys are matched (full match) against the workspace
-        // directory path, deep-merged over the default, top to bottom
-        "libs/.*-application": { "compilerOptions": { "composite": true } },
-        "apps/bff|apps/vd-gestao-admin": {
-          "compilerOptions": { "types": ["node"] },
-        },
-      },
-    },
-  },
-}
+```yaml
+files:
+  tsconfig.json:
+    # everything starts here
+    default:
+      compilerOptions: { target: es2023, strict: true }
+      include: [src]
+    rules:
+      # patterns are regexes matched (full match) against the workspace
+      # directory path, deep-merged over the default, top to bottom
+      - pattern: libs/.*-application
+        value: { compilerOptions: { composite: true } }
+      - pattern: apps/bff|apps/vd-gestao-admin
+        value: { compilerOptions: { types: [node] } }
 ```
 
 Then every workspace gets its `tsconfig.json` regenerated before any turbo
@@ -47,7 +41,7 @@ no more someone hand-editing a generated file.
 
 ```sh
 pnpm add -D -w @codibre/config-loom  # once: root devDependency
-pnpm exec config-loom init           # reverse-engineers config-loom.jsonc from your existing configs
+pnpm exec config-loom init           # reverse-engineers config-loom.yaml from your existing configs
 pnpm exec config-loom sync           # (re)generate everything
 pnpm exec config-loom check          # CI gate: fail if anything drifted
 ```
@@ -78,8 +72,8 @@ pnpm add -D -w @codibre/config-loom
 ### 2. Run init
 
 ```sh
-pnpm exec config-loom init --dry-run   # preview: shows the config-loom.jsonc it would write
-pnpm exec config-loom init             # writes config-loom.jsonc, deletes the scattered files,
+pnpm exec config-loom init --dry-run   # preview: shows the config-loom.yaml it would write
+pnpm exec config-loom init             # writes config-loom.yaml, deletes the scattered files,
                               # git-rms them from the index, adds the .gitignore block
 ```
 
@@ -103,8 +97,8 @@ tsconfig deltas are computed with TypeScript semantics, not byte equality:
 exactly what `src/**/*` includes. A rule that differs from `default` only in
 such spellings is pruned down to its real differences — e.g. a library whose
 compiler options match the default but simply has no `exclude` ends up as
-`"libs/delta": { "exclude": null }`, and a library that is merely spelled
-differently joins the `default` outright.
+`- pattern: libs/delta` carrying `value: { exclude: null }`, and a library
+that is merely spelled differently joins the `default` outright.
 
 ### 3. Wire it up — one line (init does it for you)
 
@@ -147,9 +141,10 @@ caught between commands rather than only at install time:
   "tasks": {
     "//#config-loom": {
       "inputs": [
-        "config-loom.jsonc",
-        "config-loom.json",
-        "pnpm-workspace.yaml",
+        "config-loom.yaml",
+        "config-loom.yml",
+        "pnpm-workspace.yaml"
+        // plus every `template:` file your config references — init adds them
       ],
       "outputs": ["apps/*/tsconfig.json", "libs/*/tsconfig.json"],
       "cache": true,
@@ -164,19 +159,23 @@ Declare **every** generated file in `outputs`: on a cache hit turbo restores
 exactly those paths. With the postinstall wiring you don't need this to make
 gitignored files reappear — install already does.
 
-## `config-loom.jsonc` reference
+## `config-loom.yaml` reference
 
-> The template is `.jsonc` on purpose: comments document the regex rules and
-> VS Code handles `.jsonc` natively — no "comments are not permitted in JSON"
-> squiggles. `config-loom.json` is still read (drop it in and it wins over
-> nothing — candidates are tried in order), you just have to live without
-> editor-endorsed comments there. Generated files follow the same law:
-> banners only where comments are safe for _every_ consumer — a file named
-> `*.jsonc` opted in by name and gets one. `tsconfig.json`/`jsconfig.json`
-> do **not**: tsc tolerates comments but `require('tsconfig.json')` (jest
-> configs, bundlers) is Node's strict JSON parser. Everything else renders
-> as strict JSON, no banner — per-entry `"banner": true|"<string>"` and
-> `"format": "jsonc"` override if your tools tolerate comments).
+> The template is YAML on purpose: `default` is a plain property, `rules` is
+> a list of `{ pattern, value }` entries (no escaped quotes, no comma wall),
+> text values are native multiline block scalars, big scripts can live in
+> `template:` files instead of the config, and comments document the regex
+> rules right where they matter. The canonical file is `config-loom.yaml`
+> (`config-loom.yml` also loads); the pre-YAML `config-loom.jsonc` /
+> `config-loom.json` are **not** read anymore — `init --force` removes any
+> stray legacy file. Generated files follow the same
+> law: banners only where comments are safe for _every_ consumer — a file
+> named `*.jsonc` opted in by name and gets one.
+> `tsconfig.json`/`jsconfig.json` do **not**: tsc tolerates comments but
+> `require('tsconfig.json')` (jest configs, bundlers) is Node's strict JSON
+> parser. Everything else renders as strict JSON, no banner — per-entry
+> `banner: true|"<string>"` and `format: jsonc` override if your tools
+> tolerate comments).
 
 Top level:
 
@@ -194,28 +193,57 @@ regardless: adding a project should re-run the generator.
 
 Per-file spec:
 
-| Key      | Default                                                                                 | Meaning                                                                     |
-| -------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `format` | `jsonc` for `tsconfig`/`jsconfig`/`*.jsonc`, `json` for other `.json`, `text` otherwise | `json`, `jsonc` (comments tolerated when read) or `text` (verbatim content) |
-| `arrays` | `replace`                                                                               | What a rule's array does to the base array: `replace`, `concat` or `unique` |
-| `banner` | `*.jsonc` only: warning comment; else none                                              | Header line. `false` disables; `true`/strings allowed for `jsonc`/`text`.   |
-| `rules`  | required                                                                                | `default` plus regex keys, in declaration order.                            |
+| Key        | Default                                                                                 | Meaning                                                                                                          |
+| ---------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `format`   | `jsonc` for `tsconfig`/`jsconfig`/`*.jsonc`, `json` for other `.json`, `text` otherwise | `json`, `jsonc` (comments tolerated when read) or `text` (verbatim content)                                       |
+| `arrays`   | `replace`                                                                               | What a rule's array does to the base array: `replace`, `concat` or `unique`                                       |
+| `banner`   | `*.jsonc` only: warning comment; else none                                              | Header line. `false` disables; `true`/strings allowed for `jsonc`/`text`.                                         |
+| `default`  | —                                                                                       | Base content for every matching workspace; `null` makes the entry opt-in. Omit together with `template:` when the file is rule-only. |
+| `template` | —                                                                                       | Instead of `default`: a **repo-relative file** used as the base — verbatim for `text`, parsed (comments allowed) for `json`/`jsonc`. |
+| `rules`    | `[]`                                                                                    | Ordered list of `{ pattern, value }` or `{ pattern, template }` entries. A rule without `value`/`template` opts its matches out. |
+
+Text rules read best in YAML — block scalars keep the script verbatim:
+
+```yaml
+files:
+  eslint.config.mjs:
+    format: text
+    default: |
+      import base from '@repo/eslint-config';
+      export default base;
+    rules:
+      - pattern: apps/.*-front
+        value: |
+          import front from '@repo/eslint-config-front';
+          export default front;
+      - pattern: libs/other-front
+        template: templates/eslint-other-front.mjs # content from a file
+      - pattern: libs/legacy # no `value` → these workspaces get no file
+```
+
+`template` keeps big payloads out of the config (and syntax-highlighted on
+their own): repo-relative, must stay inside the repo, and — like the config
+itself — it is a turbo task `input`, so editing it re-runs the generator.
+`template: null` means the same as a null `default`/`value`.
 
 Rule semantics:
 
-- Keys other than `default` are JavaScript regular expressions, matched
-  **fully anchored** (`^(?:pattern)$`) against the workspace directory path
-  relative to the repo root (`apps/bff`, `libs/some-ui`…), always with posix
-  separators.
+- `default` (the property above `rules`) is the base content. Every rule
+  `pattern` is a JavaScript regular expression, matched **fully anchored**
+  (`^(?:pattern)$`) against the workspace directory path relative to the
+  repo root (`apps/bff`, `libs/some-ui`…), always with posix separators.
+  Patterns are never special: even `pattern: default` just matches a
+  workspace folder literally named `default`.
 - For `json`/`jsonc`, every matching rule is deep-merged over the accumulated
   value **in declaration order** — the last rule wins on conflicts. Arrays
   follow `arrays`; everything else is overwritten.
 - For `text`, the **last matching rule replaces** the content entirely.
-- `"default": null` makes an entry opt-in: only workspaces hit by a rule get
-  the file. When a file is missing from some workspaces, `init` prefers a
-  `default` + compact `exclude` family (new projects joining the excluded
-  family are ignored for free); it falls back to opt-in (`"default": null`)
-  only when the missing workspaces cannot be covered compactly.
+- `default: null` makes an entry opt-in: only workspaces hit by a rule get
+  the file. When a file is missing from some
+  workspaces, `init` prefers a `default` + compact `exclude` family (new
+  projects joining the excluded family are ignored for free); it falls back
+  to opt-in (`default: null`) only when the missing workspaces cannot be
+  covered compactly.
 - Rule values must be objects (`json`/`jsonc`) or strings (`text`).
 
 ### What can never be generated
@@ -241,7 +269,7 @@ generated files as normal artifacts (`check` still polices them).
 ```
 config-loom <command> [options]
 
-  init     Reverse-engineer config-loom.jsonc from the configs scattered across
+  init     Reverse-engineer config-loom.yaml from the configs scattered across
            workspaces; delete, gitignore and regenerate them.
   sync     Generate every managed file (creates/updates only what changed).
   check    Exit 1 if any managed file is missing or stale. Never writes.
@@ -249,11 +277,11 @@ config-loom <command> [options]
            plus a //#config-loom task in turbo.json when it exists.
 
   --root <dir>       repository root (default cwd)
-  --config <path>    config-loom.jsonc path (default <root>/config-loom.jsonc)
+  --config <path>    config file path (default <root>/config-loom.yaml)
   --files a,b,...    [init] restrict to these file names
   --dry-run          preview, change nothing
   --keep             [init] don't delete existing files
-  --force            [init] overwrite an existing config-loom.jsonc
+  --force            [init] overwrite the config (removes a legacy JSON one)
   --yes              skip the confirmation prompt
   --no-wire          [init] skip the package.json/turbo.json wiring
   --verbose          also list unchanged files
