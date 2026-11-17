@@ -242,11 +242,6 @@ config-loom <command> [options]
   --verbose          also list unchanged files
 ```
 
-> **Naming note.** The binary is `config-loom` only — no bare `loom` alias,
-> since that name is taken on npm and Loom owns it in search results. Run it
-> with `pnpm exec config-loom …` (or `pnpm config-loom …` when no script
-> shadows the name).
-
 ## Programmatic API
 
 ```ts
