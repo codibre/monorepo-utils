@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.1](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.0...config-loom%400.1.1) (2026-11-17)
+
+### Bug Fixes
+
+* fix lib name on readme ([06d5308](https://github.com/codibre/monorepo-utils/commit/06d53085c5ccbcc4ae49aa8641f8b6a789f7c9ab))
+
 ## 0.1.0 (2026-11-17)
 
 ### Features
