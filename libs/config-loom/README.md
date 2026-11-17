@@ -163,11 +163,12 @@ gitignored files reappear — install already does.
 > squiggles. `config-loom.json` is still read (drop it in and it wins over
 > nothing — candidates are tried in order), you just have to live without
 > editor-endorsed comments there. Generated files follow the same law:
-> banners only where comments are safe for the toolchain and the IDE
-> (`tsconfig.json`/`jsconfig.json` get them; `nest-cli.json`,
-> `tsconfig.build.json` and friends render as strict JSON, no banner —
-> per-entry `"banner"` and `"format": "jsonc"` override if your tools
-> tolerate comments).
+> banners only where comments are safe for _every_ consumer — a file named
+> `*.jsonc` opted in by name and gets one. `tsconfig.json`/`jsconfig.json`
+> do **not**: tsc tolerates comments but `require('tsconfig.json')` (jest
+> configs, bundlers) is Node's strict JSON parser. Everything else renders
+> as strict JSON, no banner — per-entry `"banner": true|"<string>"` and
+> `"format": "jsonc"` override if your tools tolerate comments).
 
 Top level:
 
@@ -185,12 +186,12 @@ regardless: adding a project should re-run the generator.
 
 Per-file spec:
 
-| Key      | Default                                 | Meaning                                                                                        |
-| -------- | --------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `format` | `jsonc` for `.json`, `text` otherwise   | `json`, `jsonc` (comments tolerated when read, banner by default) or `text` (verbatim content) |
-| `arrays` | `replace`                               | What a rule's array does to the base array: `replace`, `concat` or `unique`                    |
-| `banner` | jsonc: warning comment; json/text: none | Header line. `false` disables; strings allowed for `jsonc`/`text`.                             |
-| `rules`  | required                                | `default` plus regex keys, in declaration order.                                               |
+| Key      | Default                                                                                 | Meaning                                                                     |
+| -------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `format` | `jsonc` for `tsconfig`/`jsconfig`/`*.jsonc`, `json` for other `.json`, `text` otherwise | `json`, `jsonc` (comments tolerated when read) or `text` (verbatim content) |
+| `arrays` | `replace`                                                                               | What a rule's array does to the base array: `replace`, `concat` or `unique` |
+| `banner` | `*.jsonc` only: warning comment; else none                                              | Header line. `false` disables; `true`/strings allowed for `jsonc`/`text`.   |
+| `rules`  | required                                                                                | `default` plus regex keys, in declaration order.                            |
 
 Rule semantics:
 

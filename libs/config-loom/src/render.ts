@@ -58,3 +58,35 @@ export function renderFile(
   const body = `${JSON.stringify(merged, null, 2)}\n`;
   return entry.banner ? `${entry.banner}\n${body}` : body;
 }
+
+/**
+ * The exact byte sequences a sync could have written for this entry when no
+ * opt-out applied: the `default` render plus one render per rule as if it
+ * alone had matched (banner included). Sync uses this to prove authorship
+ * of a file it must delete after an opt-out, where no banner is present.
+ */
+export function renderCandidates(entry: CompiledFileEntry): string[] {
+  if (entry.format === 'text') {
+    const wrap = (c: string) => (entry.banner ? `${entry.banner}\n${c}` : c);
+    const out: string[] = [];
+    if (typeof entry.defaultValue === 'string') {
+      out.push(wrap(entry.defaultValue));
+    }
+    for (const rule of entry.rules) {
+      if (typeof rule.value === 'string') out.push(wrap(rule.value));
+    }
+    return out;
+  }
+  const wrap = (v: JsonValue) => {
+    const body = `${JSON.stringify(v, null, 2)}\n`;
+    return entry.banner ? `${entry.banner}\n${body}` : body;
+  };
+  const base: JsonValue =
+    entry.hasDefault && entry.defaultValue !== null ? entry.defaultValue : {};
+  const out: string[] = [wrap(base)];
+  for (const rule of entry.rules) {
+    if (rule.value === null) continue;
+    out.push(wrap(deepMerge(base, rule.value, entry.arrays)));
+  }
+  return out;
+}

@@ -35,8 +35,25 @@ describe('compileConfig', () => {
     if (!entry) throw new Error('missing entry');
     expect(entry.format).toBe('jsonc');
     expect(entry.arrays).toBe('replace');
-    expect(entry.banner).toContain('config-loom');
+    expect(entry.banner).toBe(false);
     expect(entry.hasDefault).toBe(true);
+  });
+
+  it('banners *.jsonc by default; tsconfig only when explicitly asked', () => {
+    const config = compileConfig(
+      {
+        files: {
+          'renovate.jsonc': { rules: { default: {} } },
+          'tsconfig.json': {
+            banner: '/* hand-written */',
+            rules: { default: {} },
+          },
+        },
+      },
+      'test',
+    );
+    expect(config.files['renovate.jsonc']?.banner).toContain('config-loom');
+    expect(config.files['tsconfig.json']?.banner).toBe('/* hand-written */');
   });
 
   it('rejects the legacy workspaces key', () => {
