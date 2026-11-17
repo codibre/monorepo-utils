@@ -215,6 +215,7 @@ export async function main(
         const report = await wireRepo(root, {
           outputs: deriveOutputs(workspaces, Object.keys(config.files)),
           dryRun: flags.dryRun,
+          configPath: flags.config,
         });
         printWire(report);
         if (flags.dryRun) {

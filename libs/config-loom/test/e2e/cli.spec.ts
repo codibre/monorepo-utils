@@ -23,14 +23,16 @@ async function makeRepoWithLoom(): Promise<string> {
   await createWorkspace(root, 'apps/api');
   await putFile(
     root,
-    'config-loom.json',
-    JSON.stringify({
-      files: {
-        'tsconfig.json': {
-          rules: { default: { compilerOptions: { strict: true } } },
-        },
-      },
-    }),
+    'config-loom.yaml',
+    [
+      'files:',
+      "  'tsconfig.json':",
+      '    format: jsonc',
+      '    default:',
+      '      compilerOptions:',
+      '        strict: true',
+      '',
+    ].join('\n'),
   );
   return root;
 }

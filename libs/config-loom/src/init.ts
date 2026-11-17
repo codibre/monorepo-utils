@@ -910,7 +910,19 @@ export async function buildPlan(
       }
     }
 
-    const spec: FileSpecInput = { format, arrays: 'replace', rules };
+    // `default` is emitted as a spec property ABOVE `rules` — never as a
+    // pattern — so a workspace folder literally named `default` can be
+    // matched by a rule.
+    const spec: FileSpecInput = {
+      format,
+      arrays: 'replace',
+      ...(Object.prototype.hasOwnProperty.call(rules, 'default')
+        ? { default: rules['default'] ?? null }
+        : {}),
+      rules: Object.entries(rules)
+        .filter(([pattern]) => pattern !== 'default')
+        .map(([pattern, value]) => ({ pattern, value })),
+    };
     if (fileExclude && fileExclude.length > 0) {
       spec.exclude = fileExclude;
     }
@@ -973,15 +985,20 @@ export async function buildPlan(
 export function serializeConfig(config: LoomConfigInput): string {
   const header = [
     '# Managed by config-loom.',
-    '# Each rule carries a `pattern` (the literal `default`, or a regular',
-    '# expression matched full against the workspace directory path) and a',
-    '# `value`. Order matters: rules merge top to bottom, later rules win',
-    '# (specific props beat `default`), and a rule whose value is null opts',
-    '# its matches out of the file. A null INSIDE a rule value removes an',
-    '# inherited key (JSON Merge Patch, RFC 7386). A per-file "exclude" list',
-    '# is a hard opt-out beating default and rules. Prefer directory-shaped',
-    '# patterns (apps/.*, libs/foo-.*) so new projects joining a shape need',
-    '# no edit here. Multiline text values use plain YAML block scalars.',
+    '# `default:` (above `rules`) is the base content every matching',
+    '# workspace starts from; `default: null` makes the entry opt-in (only',
+    '# workspaces hit by a rule get the file). Each rule is a `pattern` (a',
+    '# regular expression matched full against the workspace directory',
+    '# path) and a `value`. Order matters: rules merge over default and',
+    '# each other, top to bottom, later rules win; a rule whose value is',
+    '# null opts its matches out of the file. A null INSIDE a rule value',
+    '# removes an inherited key (JSON Merge Patch, RFC 7386). A per-file',
+    '# "exclude" list is a hard opt-out beating default and rules.',
+    '# Prefer directory-shaped patterns (apps/.*, libs/foo-.*) so new',
+    '# projects joining a shape need no edit here. Instead of an inline',
+    '# value, `template: <repo-relative path>` pulls content from a file',
+    '# (multiline text or commented JSONC). Multiline inline values use',
+    '# plain YAML block scalars.',
     "# After editing, run 'config-loom sync' (or any turbo command, once wired).",
   ].join('\n');
   const files: Record<string, unknown> = {};
@@ -996,17 +1013,15 @@ export function serializeConfig(config: LoomConfigInput): string {
     if (spec.banner !== undefined) {
       out.banner = spec.banner;
     }
-    // The wire form is a list of { pattern, value }; map input (legacy or
-    // internal buildPlan output) is converted, `default` first as usual.
-    out.rules = Array.isArray(spec.rules)
-      ? spec.rules.map((rule) => ({
-          pattern: rule.pattern,
-          value: rule.value ?? null,
-        }))
-      : Object.entries(spec.rules).map(([pattern, value]) => ({
-          pattern,
-          value: value ?? null,
-        }));
+    if (spec.default !== undefined) {
+      out.default = spec.default;
+    }
+    if (spec.rules !== undefined && spec.rules.length > 0) {
+      out.rules = spec.rules.map((rule) => ({
+        pattern: rule.pattern,
+        value: rule.value ?? null,
+      }));
+    }
     if (spec.exclude !== undefined) {
       out.exclude = spec.exclude;
     }
@@ -1022,6 +1037,22 @@ export function serializeConfig(config: LoomConfigInput): string {
 
 async function findExistingConfig(root: string): Promise<string | null> {
   for (const name of DEFAULT_CONFIG_FILENAMES) {
+    const candidate = path.join(root, name);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+/** Pre-YAML JSON configs: no longer read, only removed by init (conversion). */
+const LEGACY_CONFIG_NAMES = ['config-loom.jsonc', 'config-loom.json'];
+
+async function findLegacyConfig(root: string): Promise<string | null> {
+  for (const name of LEGACY_CONFIG_NAMES) {
     const candidate = path.join(root, name);
     try {
       await access(candidate);
@@ -1054,9 +1085,11 @@ export async function initRepo(
   opts: InitOptions = {},
 ): Promise<InitResult> {
   const existing = await findExistingConfig(root);
-  if (existing && !opts.force && !opts.dryRun) {
+  const legacy = existing === null ? await findLegacyConfig(root) : null;
+  const occupied = existing ?? legacy;
+  if (occupied && !opts.force && !opts.dryRun) {
     throw new LoomError(
-      `${existing} already exists — re-run with --force to overwrite it`,
+      `${occupied} already exists — re-run with --force to overwrite it (a legacy JSON config is converted to YAML)`,
     );
   }
   const plan = await buildPlan(root, opts);
@@ -1102,10 +1135,9 @@ export async function initRepo(
 
   await writeFile(configPath, serializeConfig(plan.config), 'utf8');
   // Conversion: drop the legacy JSON config once the YAML one is in place.
-  const legacy =
-    existing && existing !== configPath ? path.relative(root, existing) : null;
-  if (legacy !== null) {
-    await unlink(path.join(root, legacy)).catch(() => undefined);
+  const legacyRel = legacy === null ? null : path.relative(root, legacy);
+  if (legacyRel !== null) {
+    await unlink(legacy as string).catch(() => undefined);
   }
 
   const gitRepo = await isGitRepo(root);
@@ -1114,8 +1146,8 @@ export async function initRepo(
   if (gitRepo) {
     const tracked = await listTrackedFiles(root);
     untracked = plan.managedFiles.filter((file) => tracked.has(file));
-    if (legacy !== null && tracked.has(legacy)) {
-      untracked = [...untracked, legacy];
+    if (legacyRel !== null && tracked.has(legacyRel)) {
+      untracked = [...untracked, legacyRel];
     }
     await untrackFiles(root, untracked);
     ignorePatterns = synthesizeIgnoreList(plan.managedEntries, globs, tracked);

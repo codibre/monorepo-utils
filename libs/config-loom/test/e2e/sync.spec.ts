@@ -16,24 +16,34 @@ const CONFIG: LoomConfigInput = {
   files: {
     'tsconfig.json': {
       format: 'jsonc',
-      rules: {
-        default: {
-          compilerOptions: { target: 'es2023', strict: true },
-          include: ['src'],
-        },
-        'apps/.*-legacy': { compilerOptions: { target: 'es2020' } },
-        'libs/ui': {
-          compilerOptions: { jsx: 'react-jsx' },
-          include: ['src', 'test'],
-        },
+      default: {
+        compilerOptions: { target: 'es2023', strict: true },
+        include: ['src'],
       },
+      rules: [
+        {
+          pattern: 'apps/.*-legacy',
+          value: { compilerOptions: { target: 'es2020' } },
+        },
+
+        {
+          pattern: 'libs/ui',
+          value: {
+            compilerOptions: { jsx: 'react-jsx' },
+            include: ['src', 'test'],
+          },
+        },
+      ],
     },
     'eslint.config.mjs': {
       format: 'text',
-      rules: {
-        default: "export { default } from '@repo/eslint-config';\n",
-        'apps/core': "export { default } from '@repo/eslint-config/front';\n",
-      },
+      default: "export { default } from '@repo/eslint-config';\n",
+      rules: [
+        {
+          pattern: 'apps/core',
+          value: "export { default } from '@repo/eslint-config/front';\n",
+        },
+      ],
     },
   },
 };
@@ -142,11 +152,12 @@ describe('syncAll', () => {
         files: {
           'style.txt': {
             format: 'text',
-            rules: {
-              default: 'base\n',
-              'apps/.*': 'apps\n',
-              'apps/core': 'core\n',
-            },
+            default: 'base\n',
+            rules: [
+              { pattern: 'apps/.*', value: 'apps\n' },
+
+              { pattern: 'apps/core', value: 'core\n' },
+            ],
           },
         },
       },
@@ -165,10 +176,13 @@ describe('syncAll', () => {
         files: {
           'vitest.config.mts': {
             format: 'text',
-            rules: {
-              default: null,
-              'libs/.*': "export default { test: { name: 'lib' } };\n",
-            },
+            default: null,
+            rules: [
+              {
+                pattern: 'libs/.*',
+                value: "export default { test: { name: 'lib' } };\n",
+              },
+            ],
           },
         },
       },
@@ -199,10 +213,11 @@ describe('syncAll', () => {
         files: {
           'tsconfig.json': {
             format: 'jsonc',
-            rules: {
-              ...CONFIG.files['tsconfig.json']!.rules,
-              'libs/math': null,
-            },
+            default: CONFIG.files['tsconfig.json']!.default,
+            rules: [
+              ...(CONFIG.files['tsconfig.json']!.rules ?? []),
+              { pattern: 'libs/math', value: null },
+            ],
           },
         },
       },
@@ -235,7 +250,12 @@ describe('syncAll', () => {
         files: {
           'tsconfig.json': {
             format: 'jsonc',
-            rules: { default: { a: 1 }, 'libs/.*': null, 'libs/ui': { b: 2 } },
+            default: { a: 1 },
+            rules: [
+              { pattern: 'libs/.*', value: null },
+
+              { pattern: 'libs/ui', value: { b: 2 } },
+            ],
           },
         },
       },
@@ -256,7 +276,7 @@ describe('syncAll', () => {
     const config = compileConfig(
       {
         files: {
-          'style.txt': { format: 'text', rules: { default: 'base\n' } },
+          'style.txt': { format: 'text', default: 'base\n' },
         },
       },
       'test',
@@ -268,7 +288,8 @@ describe('syncAll', () => {
         files: {
           'style.txt': {
             format: 'text',
-            rules: { default: 'base\n', 'libs/ui': null },
+            default: 'base\n',
+            rules: [{ pattern: 'libs/ui', value: null }],
           },
         },
       },
@@ -286,7 +307,7 @@ describe('syncAll', () => {
     const plain = compileConfig(
       {
         files: {
-          'tsconfig.json': { format: 'jsonc', rules: { default: { a: 1 } } },
+          'tsconfig.json': { format: 'jsonc', default: { a: 1 } },
         },
       },
       'test',
@@ -298,7 +319,8 @@ describe('syncAll', () => {
         files: {
           'tsconfig.json': {
             format: 'jsonc',
-            rules: { default: { a: 1 }, 'libs/ui': { b: 2 } },
+            default: { a: 1 },
+            rules: [{ pattern: 'libs/ui', value: { b: 2 } }],
             exclude: ['libs/math', 'apps/.*-legacy'],
           },
         },

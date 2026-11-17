@@ -1,5 +1,7 @@
+import { collectTemplatePaths, DEFAULT_CONFIG_FILENAMES } from './config';
 import { parseJsonc } from './jsonc';
 import { isPlainObject } from './util';
+import { parse as parseYaml } from 'yaml';
 import { applyEdits, modify, type ModificationOptions } from 'jsonc-parser';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -69,9 +71,27 @@ async function readTextOrNull(target: string): Promise<string | null> {
  */
 export async function wireRepo(
   root: string,
-  options: { outputs: string[]; dryRun?: boolean },
+  options: { outputs: string[]; dryRun?: boolean; configPath?: string },
 ): Promise<WireReport> {
   const report: WireReport = { scriptsAdded: [], notes: [], turbo: null };
+
+  // Template files referenced by the config are generation inputs too:
+  // editing one must miss the turbo cache and re-run the sync.
+  const templatePaths: string[] = [];
+  const configCandidates = options.configPath
+    ? [options.configPath]
+    : DEFAULT_CONFIG_FILENAMES.map((name) => path.join(root, name));
+  for (const candidate of configCandidates) {
+    const raw = await readTextOrNull(candidate);
+    if (raw !== null) {
+      try {
+        templatePaths.push(...collectTemplatePaths(parseYaml(raw)));
+      } catch {
+        // unparseable config: wire without template inputs
+      }
+      break;
+    }
+  }
 
   const turboPath = path.join(root, 'turbo.json');
   const turboText = await readTextOrNull(turboPath);
@@ -125,9 +145,8 @@ export async function wireRepo(
       inputs: [
         'config-loom.yaml',
         'config-loom.yml',
-        'config-loom.jsonc',
-        'config-loom.json',
         'pnpm-workspace.yaml',
+        ...templatePaths,
       ],
       outputs: options.outputs,
       cache: true,
