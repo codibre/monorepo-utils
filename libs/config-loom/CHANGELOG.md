@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.1...config-loom%400.1.2) (2026-11-17)
+
+### Bug Fixes
+
+* preparing stage publish ([7173522](https://github.com/codibre/monorepo-utils/commit/71735220a5204fd4db8e326c87ca513f5880fafd))
+
 ## [0.1.1](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.0...config-loom%400.1.1) (2026-11-17)
 
 ### Bug Fixes
