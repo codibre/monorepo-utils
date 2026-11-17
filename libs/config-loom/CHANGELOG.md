@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.4.0...config-loom%400.5.0) (2026-11-17)
+
+### Features
+
+* **config-loom:** default is a file-spec prop; drop JSON config; add template files ([ff20413](https://github.com/codibre/monorepo-utils/commit/ff204131e4294b60ae4925085c52ab71e15c5f24))
+* **config-loom:** switch the template to YAML with { pattern, value } rules ([929fb32](https://github.com/codibre/monorepo-utils/commit/929fb32cd710d7b284a7ca9d5cd3a4ba6b9258c1))
+
 ## [0.4.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.3.0...config-loom%400.4.0) (2026-11-17)
 
 ### Features
