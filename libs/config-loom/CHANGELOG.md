@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.3.0...config-loom%400.4.0) (2026-11-17)
+
+### Features
+
+* **config-loom:** prune tsconfig rule fields equivalent to the default ([a141836](https://github.com/codibre/monorepo-utils/commit/a141836aa2711649229d65c3fe2895e3926932db)), closes [#5](https://github.com/codibre/monorepo-utils/issues/5)
+
 ## [0.3.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.2.0...config-loom%400.3.0) (2026-11-17)
 
 ### Features
