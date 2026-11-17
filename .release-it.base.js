@@ -51,7 +51,7 @@ module.exports = {
     release: false,
   },
   hooks: {
-    'after:bump': 'pnpm publish --no-git-checks --provenance',
+    'after:bump': 'pnpm stage publish --no-git-checks --provenance',
   },
   plugins: {
     '@release-it/conventional-changelog': {
