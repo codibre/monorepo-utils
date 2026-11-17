@@ -2,6 +2,7 @@ import { buildPlan, initRepo, serializeConfig } from '../../src/init';
 import { GITIGNORE_BEGIN } from '../../src/git';
 import { loadConfig } from '../../src/config';
 import { checkAll } from '../../src/check';
+import { syncAll } from '../../src/sync';
 import {
   createWorkspace,
   fakePnpmRunner,
@@ -128,7 +129,12 @@ describe('loom init', () => {
     expect(status).toContain('?? config-loom.json'); // not ignored by the block
     const gitignore = await getRel(root, '.gitignore');
     expect(gitignore).toContain(GITIGNORE_BEGIN);
-    expect(gitignore).toContain('apps/api/tsconfig.json');
+    // wildcard-first: pnpm workspace globs widened over the managed file
+    expect(gitignore).toContain('apps/*/tsconfig.json');
+    expect(gitignore).toContain('libs/*/tsconfig.json');
+    expect(gitignore).toContain('apps/*/eslint.config.mjs');
+    expect(gitignore).not.toContain('libs/*/eslint.config.mjs');
+    expect(gitignore).not.toContain('apps/api/tsconfig.json\n');
     expect(result.untracked.length).toBeGreaterThan(0);
 
     // disk state == loom state
@@ -149,6 +155,73 @@ describe('loom init', () => {
     if (!spec) throw new Error('missing entry');
     expect(spec.rules.default).toBeNull();
     expect(Object.keys(spec.rules)).toHaveLength(3); // null + two flavors
+  });
+
+  it('jsonc partial coverage still gets a real default plus a null opt-out', async () => {
+    const root = await makeScatteredRepo();
+    const { rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await rm(join(root, 'libs/ui/tsconfig.json'));
+
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
+    const spec = plan.config.files['tsconfig.json'];
+    if (!spec) throw new Error('missing entry');
+    // the template keeps a real default, and the only missing workspace
+    // becomes an explicit null opt-out — not a wall of null rules
+    expect(spec.rules.default).toMatchObject({
+      compilerOptions: { target: 'es2023' },
+      include: ['src'],
+    });
+    expect(spec.rules['libs/ui']).toBeNull();
+
+    await initRepo(root, {
+      yes: true,
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
+    await expect(getRel(root, 'libs/ui/tsconfig.json')).rejects.toThrow();
+
+    // a workspace added later inherits the default without editing anything
+    await createWorkspace(root, 'apps/later');
+    const { config } = await loadConfig(root);
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    expect(
+      (
+        parseJsonc(
+          await getRel(root, 'apps/later/tsconfig.json'),
+          'later',
+        ) as any
+      ).compilerOptions.target,
+    ).toBe('es2023');
+  });
+
+  it('opt-in instead of a giant null alternation when most workspaces lack the file', async () => {
+    const root = await makeScatteredRepo();
+    const { rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    for (const ws of ['apps/api', 'apps/web', 'apps/admin', 'apps/portal']) {
+      await rm(join(root, ws, 'tsconfig.json'));
+    }
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
+    const spec = plan.config.files['tsconfig.json'];
+    if (!spec) throw new Error('missing entry');
+    expect(spec.rules.default).toBeNull();
+    // the only null is the opt-in default — no exclusion alternations
+    expect(
+      Object.keys(spec.rules)
+        .filter((key) => key !== 'default' && spec.rules[key] === null)
+        .map((key) => key.split('|').length)
+        .every((names) => names <= 3),
+    ).toBe(true);
+    expect(
+      Object.keys(spec.rules).filter((key) => key !== 'default'),
+    ).toHaveLength(2); // admin + ui clusters, no null rules
   });
 
   it('dry-run changes nothing', async () => {

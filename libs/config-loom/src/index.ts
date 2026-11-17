@@ -17,8 +17,14 @@ export {
 export {
   discoverWorkspaces,
   pnpmWorkspaceRunner,
+  readWorkspaceGlobs,
   type WorkspaceRunner,
 } from './workspaces';
+export {
+  synthesizeIgnorePatterns,
+  synthesizeIgnoreList,
+  type IgnoreSynthesisInput,
+} from './ignore';
 export { deepMerge } from './merge';
 export { computeDelta } from './diff';
 export type { DeltaResult } from './diff';
@@ -31,6 +37,7 @@ export {
   initRepo,
   serializeConfig,
   synthesizePattern,
+  globToRegExpSource,
   KNOWN_CONFIG_FILES,
 } from './init';
 export type { InitOptions, InitPlan, InitResult, ClusterInfo } from './init';

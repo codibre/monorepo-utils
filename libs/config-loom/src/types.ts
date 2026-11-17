@@ -38,6 +38,8 @@ export interface FileSpecInput {
    * Insertion-ordered map of `default` + regex patterns to content.
    * Regex keys are matched (anchored, full-match) against the workspace
    * directory path relative to the repo root, e.g. `libs/.*-application`.
+   * A rule value of `null` opts the matched workspaces out of the file
+   * (only meaningful when `default` is set).
    */
   rules: Record<string, JsonValue | string | null>;
 }
@@ -54,7 +56,8 @@ export interface LoomConfigInput {
 export interface CompiledRule {
   pattern: string;
   regex: RegExp;
-  value: JsonValue | string;
+  /** `null` marks an opt-out rule: matched workspaces get no file. */
+  value: JsonValue | string | null;
 }
 
 export interface CompiledFileEntry {
@@ -75,7 +78,7 @@ export interface LoomConfig {
   files: Record<string, CompiledFileEntry>;
 }
 
-export type ItemStatus = 'created' | 'updated' | 'unchanged';
+export type ItemStatus = 'created' | 'updated' | 'unchanged' | 'deleted';
 
 export interface SyncItem {
   workspace: string;
@@ -91,4 +94,6 @@ export interface SyncResult {
   updated: number;
   unchanged: number;
   skipped: number;
+  /** Generated files removed because a later opt-out (`null`) rule matched. */
+  deleted: number;
 }

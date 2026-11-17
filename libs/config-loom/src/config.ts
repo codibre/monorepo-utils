@@ -116,9 +116,24 @@ export function compileRules(
         continue; // opt-in mode: workspaces only get the file when a rule matches
       }
     } else if (value === null) {
-      errors.push(
-        `files["${file}"]: rule "${key}" cannot be null — only "default" may be null`,
-      );
+      // Opt-out rule: workspaces matched by this pattern get NO file, even
+      // when `default` would otherwise give them one. A later rule may win
+      // again (declaration order, later rules win — like every other merge).
+      try {
+        new RegExp(key);
+      } catch (e) {
+        errors.push(
+          `files["${file}"]: rule "${key}" is not a valid regular expression: ${
+            (e as Error).message
+          }`,
+        );
+        continue;
+      }
+      compiled.push({
+        pattern: key,
+        regex: new RegExp(`^(?:${key})$`),
+        value: null,
+      });
       continue;
     } else {
       try {

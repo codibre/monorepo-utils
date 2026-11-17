@@ -188,6 +188,98 @@ describe('syncAll', () => {
     expect(renderFile(entry, 'docs/not-a-workspace')).toContain('es2023');
     expect(renderFile(entry, 'apps/other-legacy')).toContain('es2020');
   });
+
+  it('a null rule opts workspaces out and removes the generated file', async () => {
+    const root = await makeRepo();
+    const config = compileConfig(CONFIG, 'test');
+    await syncAll(config, root, { runner: fakePnpmRunner });
+
+    const opted = compileConfig(
+      {
+        files: {
+          'tsconfig.json': {
+            format: 'jsonc',
+            rules: {
+              ...CONFIG.files['tsconfig.json']!.rules,
+              'libs/math': null,
+            },
+          },
+        },
+      },
+      'test',
+    );
+
+    // check reports the file as stale before anyone syncs
+    const drift = await checkAll(opted, root, { runner: fakePnpmRunner });
+    expect(drift.ok).toBe(false);
+    expect(drift.drift).toEqual([
+      expect.objectContaining({
+        file: 'tsconfig.json',
+        workspace: 'libs/math',
+        status: 'deleted',
+      }),
+    ]);
+
+    const result = await syncAll(opted, root, { runner: fakePnpmRunner });
+    expect(result.deleted).toBe(1);
+    await expect(getRel(root, 'libs/math/tsconfig.json')).rejects.toThrow();
+    expect((await checkAll(opted, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
+  });
+
+  it('a later non-null rule revives a workspace after a broad opt-out', async () => {
+    const root = await makeRepo();
+    const config = compileConfig(
+      {
+        files: {
+          'tsconfig.json': {
+            format: 'jsonc',
+            rules: { default: { a: 1 }, 'libs/.*': null, 'libs/ui': { b: 2 } },
+          },
+        },
+      },
+      'test',
+    );
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    await expect(getRel(root, 'libs/math/tsconfig.json')).rejects.toThrow();
+    const ui = parseJsonc(
+      await getRel(root, 'libs/ui/tsconfig.json'),
+      'ui',
+    ) as any;
+    expect(ui.a).toBe(1);
+    expect(ui.b).toBe(2);
+  });
+
+  it('never deletes a file it cannot prove it generated', async () => {
+    const root = await makeRepo();
+    const config = compileConfig(
+      {
+        files: {
+          'style.txt': { format: 'text', rules: { default: 'base\n' } },
+        },
+      },
+      'test',
+    );
+    await syncAll(config, root, { runner: fakePnpmRunner });
+
+    const opted = compileConfig(
+      {
+        files: {
+          'style.txt': {
+            format: 'text',
+            rules: { default: 'base\n', 'libs/ui': null },
+          },
+        },
+      },
+      'test',
+    );
+    // text entries carry no banner by default -> authorship unprovable -> skip
+    const result = await syncAll(opted, root, { runner: fakePnpmRunner });
+    expect(result.deleted).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(await getRel(root, 'libs/ui/style.txt')).toBe('base\n');
+  });
 });
 
 describe('checkAll', () => {

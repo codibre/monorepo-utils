@@ -1,6 +1,14 @@
-import { synthesizePattern } from '../../src/init';
+import { synthesizePattern, globToRegExpSource } from '../../src/init';
 
 describe('synthesizePattern', () => {
+  it('globToRegExpSource translates only the shapes we understand', () => {
+    expect(globToRegExpSource('apps/*')).toBe('apps/[^/]+');
+    expect(globToRegExpSource('libs/services/**')).toBe(
+      'libs/services(?:/.*)?',
+    );
+    expect(globToRegExpSource('apps/*/nested')).toBeNull();
+  });
+
   it('escapes a single member', () => {
     expect(synthesizePattern(['apps/api-gateway'], ['apps/api-gateway'])).toBe(
       'apps/api-gateway',
@@ -56,5 +64,52 @@ describe('synthesizePattern', () => {
     const pattern = synthesizePattern(members, all);
     const regex = new RegExp(`^(?:${pattern})$`);
     expect(all.filter((ws) => regex.test(ws)).sort()).toEqual(members);
+  });
+
+  it('widens a fully covered directory to a subtree wildcard', () => {
+    const all = ['apps/a', 'apps/b', 'libs/ui'];
+    expect(synthesizePattern(['apps/a', 'apps/b'], all)).toBe('apps/.*');
+  });
+
+  it('uses the whole-subtree shape when the cluster is every descendant', () => {
+    const all = ['services/nest/a', 'services/nest/deep/b', 'apps/web'];
+    expect(
+      synthesizePattern(['services/nest/a', 'services/nest/deep/b'], all),
+    ).toBe('services/nest/.*');
+  });
+
+  it('uses a bounded common name prefix so future siblings join for free', () => {
+    const all = [
+      'packages/capacitor-native-google-auth',
+      'packages/capacitor-residential-fetch',
+      'packages/medicine-quotation-sdk',
+    ];
+    expect(
+      synthesizePattern(
+        [
+          'packages/capacitor-native-google-auth',
+          'packages/capacitor-residential-fetch',
+        ],
+        all,
+      ),
+    ).toBe('packages/capacitor-.*');
+  });
+
+  it('uses ** as the full-repo shape when the cluster covers everything', () => {
+    const all = ['apps/a', 'apps/b', 'libs/ui'];
+    expect(synthesizePattern(all, all, ['**'])).toBe('.*');
+  });
+
+  it('still validates glob candidates: over-match falls back', () => {
+    const all = ['apps/a', 'apps/b', 'libs/ui'];
+    const pattern = synthesizePattern(['apps/a', 'libs/ui'], all, [
+      'apps/*',
+      'libs/*',
+    ]);
+    const regex = new RegExp(`^(?:${pattern})$`);
+    expect(all.filter((ws) => regex.test(ws)).sort()).toEqual([
+      'apps/a',
+      'libs/ui',
+    ]);
   });
 });
