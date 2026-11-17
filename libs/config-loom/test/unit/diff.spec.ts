@@ -1,4 +1,4 @@
-import { computeDelta } from '../../src/diff';
+import { computeDelta, tsconfigEqual } from '../../src/diff';
 
 describe('computeDelta', () => {
   it('returns an empty patch for equal values', () => {
@@ -56,6 +56,81 @@ describe('computeDelta', () => {
     expect(computeDelta(base, target)).toEqual({
       kind: 'delta',
       value: { a: { list: [{ x: 1 }, { x: 2 }], flag: true } },
+    });
+  });
+});
+
+describe('tsconfigEqual (issue #5)', () => {
+  it('treats ./-prefixed and bare paths as the same', () => {
+    expect(tsconfigEqual('./dist', 'dist')).toBe(true);
+    expect(
+      tsconfigEqual(
+        { compilerOptions: { outDir: './dist', rootDir: './src' } },
+        { compilerOptions: { outDir: 'dist', rootDir: 'src' } },
+      ),
+    ).toBe(true);
+  });
+
+  it('treats a directory and its recursive glob as the same', () => {
+    expect(tsconfigEqual(['src/**/*'], ['src'])).toBe(true);
+    expect(tsconfigEqual('./src/**/*', 'src')).toBe(true);
+    expect(tsconfigEqual(['./src/**/*'], ['src'])).toBe(true);
+  });
+
+  it('keeps genuinely different values apart', () => {
+    expect(tsconfigEqual('dist', 'dist/src')).toBe(false);
+    expect(tsconfigEqual(['src'], ['test'])).toBe(false);
+    expect(tsconfigEqual({ a: 1 }, { a: 2 })).toBe(false);
+    expect(tsconfigEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(tsconfigEqual('./a', 'a/b')).toBe(false);
+    expect(tsconfigEqual('src/**/*', 'src/*')).toBe(false);
+  });
+});
+
+describe('computeDelta with the tsconfig comparator (issue #5)', () => {
+  it('prunes everything equivalent, keeping only the real difference', () => {
+    const base = {
+      extends: '@monorepo/config/typescript/tsconfig.json',
+      compilerOptions: { outDir: './dist', rootDir: './src' },
+      include: ['src/**/*'],
+      exclude: ['node_modules', 'dist'],
+    };
+    const target = {
+      extends: '@monorepo/config/typescript/tsconfig.json',
+      compilerOptions: { outDir: 'dist', rootDir: 'src' },
+      include: ['src'],
+    };
+    expect(computeDelta(base, target, tsconfigEqual)).toEqual({
+      kind: 'delta',
+      value: { exclude: null },
+    });
+  });
+
+  it('folds an equivalent-but-differently-spelled file into the default', () => {
+    const base = {
+      compilerOptions: { outDir: './dist' },
+      include: ['./src/**/*'],
+    };
+    const target = { compilerOptions: { outDir: 'dist' }, include: ['src'] };
+    expect(computeDelta(base, target, tsconfigEqual)).toEqual({
+      kind: 'delta',
+      value: {},
+    });
+  });
+
+  it('keeps overrides that are not equivalent', () => {
+    const base = { compilerOptions: { outDir: './dist' } };
+    const target = { compilerOptions: { outDir: 'build', jsx: 'preserve' } };
+    expect(computeDelta(base, target, tsconfigEqual)).toEqual({
+      kind: 'delta',
+      value: { compilerOptions: { outDir: 'build', jsx: 'preserve' } },
+    });
+  });
+
+  it('stays byte-strict when no comparator is given', () => {
+    expect(computeDelta({ outDir: './dist' }, { outDir: 'dist' })).toEqual({
+      kind: 'delta',
+      value: { outDir: 'dist' },
     });
   });
 });

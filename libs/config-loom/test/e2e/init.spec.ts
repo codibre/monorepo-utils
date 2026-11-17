@@ -348,3 +348,76 @@ describe('loom init', () => {
     expect(text.startsWith('// Managed by config-loom')).toBe(true);
   });
 });
+
+describe('loom init tsconfig intelligence (issue #5)', () => {
+  it('prunes rule fields equivalent to the default', async () => {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'libs/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    await git(root, 'init', '-q');
+    const base =
+      JSON.stringify(
+        {
+          extends: '@monorepo/config/typescript/tsconfig.json',
+          compilerOptions: { outDir: './dist', rootDir: './src' },
+          include: ['src/**/*'],
+          exclude: ['node_modules', 'dist'],
+        },
+        null,
+        2,
+      ) + '\n';
+    const variant =
+      JSON.stringify(
+        {
+          extends: '@monorepo/config/typescript/tsconfig.json',
+          compilerOptions: { outDir: 'dist', rootDir: 'src' },
+          include: ['src'],
+        },
+        null,
+        2,
+      ) + '\n';
+    await createWorkspace(root, 'libs/alpha', { 'tsconfig.json': base });
+    await createWorkspace(root, 'libs/beta', { 'tsconfig.json': base });
+    await createWorkspace(root, 'libs/gamma', { 'tsconfig.json': base });
+    await createWorkspace(root, 'libs/delta', { 'tsconfig.json': variant });
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-qm', 'feat: scatter configs');
+
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
+    const spec = plan.config.files['tsconfig.json'];
+    if (!spec) throw new Error('missing entry');
+    // Only the genuine difference (no `exclude`) survives in the rule.
+    expect(spec.rules).toEqual({
+      default: {
+        extends: '@monorepo/config/typescript/tsconfig.json',
+        compilerOptions: { outDir: './dist', rootDir: './src' },
+        include: ['src/**/*'],
+        exclude: ['node_modules', 'dist'],
+      },
+      'libs/delta': { exclude: null },
+    });
+
+    // The variant folds into the default spelling (`./dist` ≡ `dist`),
+    // keeping only its real difference: no `exclude`.
+    const config = compileConfig(plan.config, 'test');
+    const sync = await syncAll(config, root, { runner: fakePnpmRunner });
+    expect(sync.created + sync.updated).toBeGreaterThan(0);
+    const delta = parseJsonc(
+      await getRel(root, 'libs/delta/tsconfig.json'),
+      'libs/delta/tsconfig.json',
+    );
+    const expected = JSON.parse(base) as Record<string, unknown>;
+    delete expected.exclude;
+    expect(delta).toEqual(expected);
+    expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
+  });
+});

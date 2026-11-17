@@ -11,6 +11,13 @@ export interface DeltaResult {
   value: JsonValue;
 }
 
+/**
+ * Comparison used to decide a subtree is unchanged. Defaults to strict
+ * `deepEqual`; callers may pass a semantic comparator so equivalent values
+ * (e.g. `./dist` and `dist` in a tsconfig) collapse into the default.
+ */
+export type Equal = (a: JsonValue, b: JsonValue) => boolean;
+
 function isEmptyPatch(value: JsonValue): boolean {
   return (
     typeof value === 'object' &&
@@ -20,8 +27,8 @@ function isEmptyPatch(value: JsonValue): boolean {
   );
 }
 
-function deltaOf(base: JsonValue, target: JsonValue): DeltaResult {
-  if (deepEqual(base, target)) {
+function deltaOf(base: JsonValue, target: JsonValue, same: Equal): DeltaResult {
+  if (same(base, target)) {
     return { kind: 'delta', value: {} };
   }
   const baseIsObject =
@@ -41,6 +48,7 @@ function deltaOf(base: JsonValue, target: JsonValue): DeltaResult {
       const inner = deltaOf(
         baseObj[key] as JsonValue,
         targetObj[key] as JsonValue,
+        same,
       );
       if (inner.kind === 'full') {
         return { kind: 'full', value: target };
@@ -64,7 +72,56 @@ function deltaOf(base: JsonValue, target: JsonValue): DeltaResult {
 /**
  * Compute the minimal merge patch that turns `base` into `target`
  * (RFC 7386: nulls remove keys), or signal that the full value is required.
+ * `same` overrides the equality test used to skip unchanged subtrees.
  */
-export function computeDelta(base: JsonValue, target: JsonValue): DeltaResult {
-  return deltaOf(base, target);
+export function computeDelta(
+  base: JsonValue,
+  target: JsonValue,
+  same: Equal = deepEqual,
+): DeltaResult {
+  return deltaOf(base, target, same);
+}
+
+/**
+ * Normalize one tsconfig-ish path string for comparison: `./dist` addresses
+ * the same directory as `dist`, and a directory followed by a recursive glob
+ * (double-star, slash, star) includes exactly what the bare `dir` entry
+ * includes, because TypeScript expands directories recursively.
+ */
+function normalizePathish(value: string): string {
+  let out = value;
+  if (out.startsWith('./')) {
+    out = out.slice(2);
+  }
+  if (out.endsWith('/**/*')) {
+    out = out.slice(0, -'/**/*'.length) || '.';
+  }
+  return out;
+}
+
+function normalizeTsPaths(value: JsonValue): JsonValue {
+  if (typeof value === 'string') {
+    return normalizePathish(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeTsPaths(item));
+  }
+  if (typeof value === 'object' && value !== null) {
+    const out: Record<string, JsonValue> = {};
+    for (const [key, inner] of Object.entries(value)) {
+      out[key] = normalizeTsPaths(inner);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Semantic equality for tsconfig/jsconfig values: strings that only differ by
+ * a leading `./` or a trailing recursive glob describe the same path, so a
+ * rule repeating `dist` where the default says `./dist` carries no
+ * information.
+ */
+export function tsconfigEqual(a: JsonValue, b: JsonValue): boolean {
+  return deepEqual(normalizeTsPaths(a), normalizeTsPaths(b));
 }
