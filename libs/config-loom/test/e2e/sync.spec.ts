@@ -280,6 +280,41 @@ describe('syncAll', () => {
     expect(result.skipped).toBe(1);
     expect(await getRel(root, 'libs/ui/style.txt')).toBe('base\n');
   });
+
+  it('per-file exclude removes files and beats even revive rules', async () => {
+    const root = await makeRepo();
+    const plain = compileConfig(
+      {
+        files: {
+          'tsconfig.json': { format: 'jsonc', rules: { default: { a: 1 } } },
+        },
+      },
+      'test',
+    );
+    await syncAll(plain, root, { runner: fakePnpmRunner });
+
+    const excluded = compileConfig(
+      {
+        files: {
+          'tsconfig.json': {
+            format: 'jsonc',
+            rules: { default: { a: 1 }, 'libs/ui': { b: 2 } },
+            exclude: ['libs/math', 'apps/.*-legacy'],
+          },
+        },
+      },
+      'test',
+    );
+    const result = await syncAll(excluded, root, { runner: fakePnpmRunner });
+    expect(result.deleted).toBe(2);
+    await expect(getRel(root, 'libs/math/tsconfig.json')).rejects.toThrow();
+    await expect(
+      getRel(root, 'apps/my-legacy/tsconfig.json'),
+    ).rejects.toThrow();
+    // matching workspaces still get their merged content
+    expect(await getRel(root, 'libs/ui/tsconfig.json')).toContain('"b": 2');
+    expect(await getRel(root, 'apps/core/tsconfig.json')).toContain('"a": 1');
+  });
 });
 
 describe('checkAll', () => {

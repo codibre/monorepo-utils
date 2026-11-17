@@ -8,13 +8,18 @@ import type { CompiledFileEntry, JsonValue } from './types';
  *
  * JSON/JSONC: start from `default` and deep-merge every matching rule in
  * declaration order (deterministic: later rules win on conflicts; a `null`
- * rule suppresses the file, a later non-null rule revives it).
+ * rule suppresses the file, a later non-null rule revives it — but a
+ * workspace matching the per-file `exclude` list never gets the file).
  * Text: the last matching rule replaces the content entirely.
  */
 export function renderFile(
   entry: CompiledFileEntry,
   workspace: string,
 ): string | null {
+  if (entry.exclude.some((pattern) => pattern.test(workspace))) {
+    // Hard per-file opt-out: no file, no matter what default/rules say.
+    return null;
+  }
   const matches = entry.rules.filter((rule) => rule.regex.test(workspace));
   if (
     matches.length === 0 &&

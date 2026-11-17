@@ -1,4 +1,77 @@
-import { synthesizePattern, globToRegExpSource } from '../../src/init';
+import {
+  synthesizePattern,
+  synthesizeExclude,
+  globToRegExpSource,
+} from '../../src/init';
+
+describe('synthesizeExclude', () => {
+  it('finds prefix and suffix naming families', () => {
+    const all = [
+      'apps/medicine-quotation-api',
+      'apps/medicine-quotation-cli',
+      'packages/capacitor-a',
+      'packages/capacitor-b',
+      'packages/medicine-quotation-sdk',
+      'packages/mq-apm',
+      'packages/mq-bus',
+      'packages/mq-logger',
+      'packages/farmaciasapp-medicine-quotation-sdk',
+      'packages/panvel-medicine-quotation-sdk',
+    ];
+    const present = new Set([
+      'apps/medicine-quotation-api',
+      'packages/capacitor-a',
+      'packages/capacitor-b',
+      'packages/medicine-quotation-sdk',
+    ]);
+    const missing = all.filter((ws) => !present.has(ws));
+    expect(synthesizeExclude(missing, present, all)).toEqual([
+      'packages/.*-medicine-quotation-sdk',
+      'packages/mq-.*',
+      'apps/medicine-quotation-cli',
+    ]);
+  });
+
+  it('collapses a directory whose whole subtree lacks the file', () => {
+    const all = ['apps/a', 'apps/b', 'libs/x'];
+    expect(
+      synthesizeExclude(
+        ['apps/a', 'apps/b', 'libs/x'],
+        new Set(['libs/x']),
+        all,
+      ),
+    ).toEqual(['apps/.*', 'libs/x']);
+  });
+
+  it('never excludes a workspace that holds the file', () => {
+    const all = ['packages/a-x', 'packages/b-x', 'packages/c-x'];
+    expect(
+      synthesizeExclude(
+        ['packages/a-x', 'packages/b-x'],
+        new Set(['packages/c-x']),
+        all,
+      ),
+    ).toEqual(['packages/a-x|packages/b-x']);
+  });
+
+  it('returns null when nothing collapses compactly', () => {
+    const all = [
+      'apps/x1',
+      'apps/x2',
+      'apps/x3',
+      'apps/x4',
+      'apps/x5',
+      'apps/x6',
+    ];
+    expect(
+      synthesizeExclude(
+        ['apps/x2', 'apps/x3', 'apps/x4', 'apps/x5', 'apps/x6'],
+        new Set(['apps/x1']),
+        all,
+      ),
+    ).toBeNull();
+  });
+});
 
 describe('synthesizePattern', () => {
   it('globToRegExpSource translates only the shapes we understand', () => {

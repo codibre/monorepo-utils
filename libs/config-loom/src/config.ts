@@ -234,7 +234,31 @@ export function compileConfig(
     }
     const banner = resolveBanner(file, format, spec.banner, errors);
     const compiledRules = compileRules(file, format, spec.rules, errors);
-    files[file] = { file, format, arrays, banner, ...compiledRules };
+    const exclude: RegExp[] = [];
+    if (spec.exclude !== undefined) {
+      if (!Array.isArray(spec.exclude)) {
+        errors.push(`files["${file}"]: "exclude" must be an array of strings`);
+      } else {
+        for (const key of spec.exclude) {
+          if (typeof key !== 'string') {
+            errors.push(`files["${file}"]: exclude pattern must be a string`);
+            continue;
+          }
+          try {
+            new RegExp(key);
+          } catch (e) {
+            errors.push(
+              `files["${file}"]: exclude "${key}" is not a valid regular expression: ${
+                (e as Error).message
+              }`,
+            );
+            continue;
+          }
+          exclude.push(new RegExp(`^(?:${key})$`));
+        }
+      }
+    }
+    files[file] = { file, format, arrays, banner, exclude, ...compiledRules };
   }
 
   if ('workspaces' in input) {

@@ -157,7 +157,7 @@ describe('loom init', () => {
     expect(Object.keys(spec.rules)).toHaveLength(3); // null + two flavors
   });
 
-  it('jsonc partial coverage still gets a real default plus a null opt-out', async () => {
+  it('jsonc partial coverage gets a real default plus a compact exclude', async () => {
     const root = await makeScatteredRepo();
     const { rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
@@ -169,13 +169,14 @@ describe('loom init', () => {
     });
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
-    // the template keeps a real default, and the only missing workspace
-    // becomes an explicit null opt-out — not a wall of null rules
+    // the workspace that lacks the file becomes a hard exclude, so every
+    // remaining workspace (including future ones) inherits a real default
     expect(spec.rules.default).toMatchObject({
       compilerOptions: { target: 'es2023' },
       include: ['src'],
     });
-    expect(spec.rules['libs/ui']).toBeNull();
+    expect(spec.exclude).toEqual(['libs/ui']);
+    expect(Object.values(spec.rules).includes(null)).toBe(false);
 
     await initRepo(root, {
       yes: true,
@@ -198,12 +199,17 @@ describe('loom init', () => {
     ).toBe('es2023');
   });
 
-  it('opt-in instead of a giant null alternation when most workspaces lack the file', async () => {
-    const root = await makeScatteredRepo();
-    const { rm } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    for (const ws of ['apps/api', 'apps/web', 'apps/admin', 'apps/portal']) {
-      await rm(join(root, ws, 'tsconfig.json'));
+  it('stays opt-in when the missing set has no compact family cover', async () => {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    await createWorkspace(root, 'apps/x1', { 'tsconfig.json': tsConfig() });
+    for (const n of ['x2', 'x3', 'x4', 'x5', 'x6']) {
+      await createWorkspace(root, `apps/${n}`);
     }
     const plan = await buildPlan(root, {
       runner: fakePnpmRunner,
@@ -211,17 +217,10 @@ describe('loom init', () => {
     });
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
+    // 5 scattered singletons are not a family: opt-in, not an exclude list
     expect(spec.rules.default).toBeNull();
-    // the only null is the opt-in default — no exclusion alternations
-    expect(
-      Object.keys(spec.rules)
-        .filter((key) => key !== 'default' && spec.rules[key] === null)
-        .map((key) => key.split('|').length)
-        .every((names) => names <= 3),
-    ).toBe(true);
-    expect(
-      Object.keys(spec.rules).filter((key) => key !== 'default'),
-    ).toHaveLength(2); // admin + ui clusters, no null rules
+    expect(spec.exclude).toBeUndefined();
+    expect(Object.keys(spec.rules)).toEqual(['default', 'apps/x1']);
   });
 
   it('dry-run changes nothing', async () => {

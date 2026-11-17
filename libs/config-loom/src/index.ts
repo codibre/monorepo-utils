@@ -37,6 +37,7 @@ export {
   initRepo,
   serializeConfig,
   synthesizePattern,
+  synthesizeExclude,
   globToRegExpSource,
   KNOWN_CONFIG_FILES,
 } from './init';

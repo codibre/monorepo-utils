@@ -48,4 +48,16 @@ describe('deepMerge', () => {
       compilerOptions: { strict: true, paths: { '@x': ['src/x'] } },
     });
   });
+
+  it('removes inherited keys with merge-patch nulls (RFC 7386)', () => {
+    const base: JsonValue = {
+      compilerOptions: { strict: true, target: 'es2022' },
+      include: ['src'],
+    };
+    const patch: JsonValue = { compilerOptions: { target: null } };
+    expect(deepMerge(base, patch)).toEqual({
+      compilerOptions: { strict: true },
+      include: ['src'],
+    });
+  });
 });

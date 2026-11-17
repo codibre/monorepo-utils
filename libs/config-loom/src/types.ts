@@ -42,6 +42,15 @@ export interface FileSpecInput {
    * (only meaningful when `default` is set).
    */
   rules: Record<string, JsonValue | string | null>;
+  /**
+   * Regular expressions (same syntax as rule keys, full match against the
+   * workspace directory) for workspaces that must NEVER receive this file.
+   * A hard opt-out: it beats `default` and every rule, at any position.
+   * Prefer directory/naming families (`packages/mq-.*`,
+   * `packages/.*-medicine-quotation-sdk`) over name lists, so new projects
+   * joining the family stay excluded without editing anything.
+   */
+  exclude?: string[];
 }
 
 /**
@@ -71,6 +80,8 @@ export interface CompiledFileEntry {
   defaultValue: JsonValue | string | null;
   /** Non-default rules, in declaration order. */
   rules: CompiledRule[];
+  /** Compiled per-file `exclude` patterns: hard opt-out, beats everything. */
+  exclude: RegExp[];
 }
 
 export interface LoomConfig {

@@ -16,7 +16,6 @@ import { parseJsonc } from './jsonc';
 import { syncAll } from './sync';
 import {
   canonicalJson,
-  deepEqual,
   escapeRegExp,
   isPlainObject,
   normalizeText,
@@ -30,7 +29,6 @@ import { createInterface } from 'node:readline';
 import type {
   FileFormat,
   FileSpecInput,
-  JsonObject,
   JsonValue,
   LoomConfigInput,
   SyncResult,
@@ -57,6 +55,9 @@ export const KNOWN_CONFIG_FILES = [
 
 const MIN_SHARED_SUFFIX = 4;
 const MIN_SHARED_PREFIX = 6;
+// An `exclude` list only beats enumerating names while it stays small.
+const MAX_EXCLUDE_PATTERNS = 4;
+const MAX_EXCLUDE_ALTERNATION = 3;
 
 interface Cluster {
   normalized: string;
@@ -206,6 +207,53 @@ export function globToRegExpSource(glob: string): string | null {
   return match[2] === '*' ? `${base}/[^/]+` : `${base}(?:/.*)?`;
 }
 
+/** Hyphen-aligned trailing token groups: `a-b-c` -> ['c', 'b-c'] (keys for `.*-KEY`). */
+function alignedSuffixes(name: string): string[] {
+  const parts = name.split('-');
+  const out: string[] = [];
+  for (let i = parts.length - 1; i > 0; i--) {
+    out.push(parts.slice(i).join('-'));
+  }
+  return out;
+}
+
+/** Hyphen-aligned leading token groups ending at a boundary: `a-b` -> ['a-']. */
+function alignedPrefixes(name: string): string[] {
+  const parts = name.split('-');
+  const out: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    out.push(`${parts.slice(0, i).join('-')}-`);
+  }
+  return out;
+}
+
+/**
+ * The family key shared by the most names (>= 2), preferring longer keys on
+ * ties; keys shorter than `minLength` are ignored.
+ */
+function bestFamily(keysPerName: string[][], minLength: number): string | null {
+  const counts = new Map<string, number>();
+  for (const keys of keysPerName) {
+    for (const key of new Set(keys)) {
+      if (key.length >= minLength) {
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  let best: string | null = null;
+  let bestCount = 1;
+  for (const [key, count] of counts) {
+    if (
+      count > bestCount ||
+      (count === bestCount && best !== null && key.length > best.length)
+    ) {
+      best = key;
+      bestCount = count;
+    }
+  }
+  return bestCount >= 2 ? best : null;
+}
+
 /**
  * Derive a regex for a cluster that matches EXACTLY its members among all
  * current workspaces. Candidates, shortest first: shared parent dir + name
@@ -215,6 +263,117 @@ export function globToRegExpSource(glob: string): string | null {
  * result never over-matches TODAY; directory-shaped candidates are the point
  * because they keep matching TOMORROW, when a new project joins the shape.
  */
+/**
+ * Collapse workspaces that LACK a file into a few directory/naming-family
+ * regexes usable as a file-level `exclude` list (see FileSpecInput.exclude).
+ *
+ * A candidate is only accepted when it matches none of the `present`
+ * workspaces — the exclusion can never swallow a project that has the file
+ * today. Families are discovered from hyphen-aligned name tokens
+ * (`packages/mq-.*`, `packages/.*-medicine-quotation-sdk`) or from a parent
+ * directory whose whole subtree lacks the file. When the missing workspaces
+ * cannot be covered compactly the result is `null` and the caller must keep
+ * the file opt-in instead of enumerating names (drift).
+ */
+export function synthesizeExclude(
+  missing: string[],
+  present: Set<string>,
+  allWorkspaces: string[],
+): string[] | null {
+  if (missing.length === 0) {
+    return [];
+  }
+  const remaining = new Set(missing);
+  const out: string[] = [];
+  const touchesPresent = (regex: RegExp): boolean =>
+    allWorkspaces.some((ws) => present.has(ws) && regex.test(ws));
+  const accept = (pattern: string): boolean => {
+    const regex = new RegExp(`^(?:${pattern})$`);
+    if (touchesPresent(regex)) {
+      return false;
+    }
+    let covered = 0;
+    for (const ws of remaining) {
+      if (regex.test(ws)) {
+        remaining.delete(ws);
+        covered++;
+      }
+    }
+    if (covered === 0) {
+      return false;
+    }
+    out.push(pattern);
+    return true;
+  };
+
+  while (remaining.size > 0 && out.length < MAX_EXCLUDE_PATTERNS) {
+    const groups = new Map<string, string[]>();
+    for (const ws of remaining) {
+      const bucket = groups.get(parentOf(ws));
+      if (bucket) {
+        bucket.push(ws);
+      } else {
+        groups.set(parentOf(ws), [ws]);
+      }
+    }
+    let progressed = false;
+    const ordered = [...groups.entries()].sort(
+      (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]),
+    );
+    for (const [parent, members] of ordered) {
+      if (members.length < 2) {
+        continue;
+      }
+      const names = members.map(nameOf);
+      const candidates: string[] = [];
+      if (parent !== '') {
+        const escParent = escapeRegExp(parent);
+        if (
+          !allWorkspaces.some(
+            (ws) => present.has(ws) && ws.startsWith(`${parent}/`),
+          )
+        ) {
+          candidates.push(`${escParent}/.*`);
+        }
+        const suffix = bestFamily(
+          names.map(alignedSuffixes),
+          MIN_SHARED_SUFFIX,
+        );
+        if (suffix !== null) {
+          candidates.push(`${escParent}/.*-${escapeRegExp(suffix)}`);
+        }
+        const prefix = bestFamily(names.map(alignedPrefixes), 3);
+        if (prefix !== null) {
+          candidates.push(`${escParent}/${escapeRegExp(prefix)}.*`);
+        }
+      }
+      if (members.length <= MAX_EXCLUDE_ALTERNATION) {
+        candidates.push(members.map((ws) => escapeRegExp(ws)).join('|'));
+      }
+      for (const candidate of candidates) {
+        if (accept(candidate)) {
+          progressed = true;
+          break;
+        }
+      }
+      if (progressed) {
+        break;
+      }
+    }
+    if (!progressed) {
+      break;
+    }
+  }
+
+  for (const ws of remaining) {
+    out.push(escapeRegExp(ws));
+  }
+  if (out.length > MAX_EXCLUDE_PATTERNS || out.join('').length > 240) {
+    return null;
+  }
+  return out;
+}
+
 export function synthesizePattern(
   members: string[],
   allWorkspaces: string[],
@@ -311,46 +470,6 @@ export function synthesizePattern(
     }
   }
   return alternation;
-}
-
-/**
- * Deep intersection of parsed configs: keys every cluster agrees on with an
- * equal value (recursed through objects). This is the safest real `default`
- * for partial coverage — content that provably belongs to every flavor.
- */
-function intersectPair(a: JsonObject, b: JsonObject): JsonObject {
-  const out: JsonObject = {};
-  for (const [key, av] of Object.entries(a)) {
-    if (!(key in b)) {
-      continue;
-    }
-    const bv = b[key] as JsonValue;
-    if (deepEqual(av, bv)) {
-      out[key] = structuredClone(av);
-      continue;
-    }
-    if (isPlainObject(av) && isPlainObject(bv)) {
-      const inner = intersectPair(av, bv);
-      if (Object.keys(inner).length > 0) {
-        out[key] = inner;
-      }
-    }
-  }
-  return out;
-}
-
-function commonBase(clusters: Cluster[]): JsonObject | null {
-  const objects = clusters
-    .map((cluster) => cluster.parsed)
-    .filter((parsed): parsed is JsonObject => parsed !== null);
-  if (objects.length === 0) {
-    return null;
-  }
-  let base = objects[0] as JsonObject;
-  for (const object of objects.slice(1)) {
-    base = intersectPair(base, object);
-  }
-  return base;
 }
 
 function isEmptyPatch(value: JsonValue): boolean {
@@ -470,6 +589,7 @@ export async function buildPlan(
     const missing = workspaces.filter((ws) => !present.has(ws));
 
     const rules: Record<string, JsonValue | string | null> = {};
+    let fileExclude: string[] | undefined;
 
     if (format === 'text') {
       // Text has no merge semantics: a default only makes sense when every
@@ -501,29 +621,24 @@ export async function buildPlan(
         });
       }
     } else {
-      // JSON/JSONC defaults:
-      // - full coverage: the majority cluster is the default (everything
-      //   else becomes a delta against it, exactly as before);
-      // - partial coverage: a real default (the deep intersection of every
-      //   cluster) is only justified when MOST workspaces hold the file AND
-      //   the workspaces missing it collapse into a compact pattern. An
-      //   18-name null alternation would have to be edited on every added
-      //   project — drift — so in that case the file stays opt-in
-      //   (`default: null`) and new projects inherit nothing until asked.
-      const base = fullCoverage ? null : commonBase(sorted);
-      const substantial = base !== null && Object.keys(base).length > 0;
-      const majority = present.size * 2 >= workspaces.length;
-      const exclusionIsCompact =
-        missing.length <= 3 ||
-        !uniquePattern({}, missing, workspaces, globs).includes('|');
-      const defaultValue: JsonValue | null = fullCoverage
-        ? clusterValue(mode, format)
-        : substantial && majority && exclusionIsCompact
-          ? base
-          : null;
-      rules.default = defaultValue;
-      const deltaBase = fullCoverage ? mode.parsed : defaultValue;
-      if (fullCoverage) {
+      // JSON/JSONC defaults — `default` is the common base; every matching
+      // rule deep-merges on top of it, so specific props win.
+      // - full coverage: default = the majority cluster, everything else is
+      //   a delta against it.
+      // - partial coverage: default is only safe when the workspaces that
+      //   lack the file collapse into a compact `exclude` family list
+      //   (packages/mq-.*, packages/.*-medicine-quotation-sdk): new projects
+      //   joining the default shape inherit the file immediately, and ones
+      //   joining an excluded family are ignored for free. Without a compact
+      //   cover the file stays opt-in (`default: null`) — an 18-name
+      //   exclusion would be drift waiting for the next added project.
+      const excluded = fullCoverage
+        ? []
+        : synthesizeExclude(missing, present, workspaces);
+      const useDefault = fullCoverage || excluded !== null;
+      rules.default = useDefault ? clusterValue(mode, format) : null;
+      const deltaBase = useDefault ? mode.parsed : null;
+      if (useDefault) {
         clusters.push({
           file,
           pattern: 'default',
@@ -532,7 +647,7 @@ export async function buildPlan(
         });
       }
       for (const cluster of sorted) {
-        if (fullCoverage && cluster === mode) {
+        if (useDefault && cluster === mode) {
           continue;
         }
         let value: JsonValue;
@@ -573,12 +688,11 @@ export async function buildPlan(
           kind,
         });
       }
-      if (!fullCoverage && defaultValue !== null && missing.length > 0) {
-        const pattern = uniquePattern(rules, missing, workspaces, globs);
-        rules[pattern] = null;
+      if (excluded && excluded.length > 0) {
+        fileExclude = excluded;
         clusters.push({
           file,
-          pattern,
+          pattern: excluded.join(' | '),
           members: [...missing],
           kind: 'excluded',
         });
@@ -586,6 +700,9 @@ export async function buildPlan(
     }
 
     const spec: FileSpecInput = { format, arrays: 'replace', rules };
+    if (fileExclude && fileExclude.length > 0) {
+      spec.exclude = fileExclude;
+    }
     config.files[file] = spec;
     for (const cluster of sorted) {
       for (const member of cluster.members) {
@@ -647,9 +764,12 @@ export function serializeConfig(config: LoomConfigInput): string {
     '// Managed by config-loom.',
     '// Rule keys are regular expressions matched (full match) against the',
     '// workspace directory path. Order matters: rules merge top to bottom,',
-    '// later rules win, and a rule whose value is null opts its matches',
-    '// out of the file. Prefer directory-shaped keys (apps/[^/]+,',
-    '// libs/foo-.*) so new projects joining a shape need no edit here.',
+    '// later rules win (specific props beat `default`), and a rule whose',
+    '// value is null opts its matches out of the file. A null INSIDE a rule',
+    '// value removes an inherited key (JSON Merge Patch, RFC 7386). A',
+    '// per-file "exclude" list is a hard opt-out beating default and rules.',
+    '// Prefer directory-shaped keys (apps/[^/]+, libs/foo-.*) so new',
+    '// projects joining a shape need no edit here.',
     "// After editing, run 'config-loom sync' (or any turbo command, once wired).",
   ].join('\n');
   return `${header}\n${JSON.stringify(config, null, 2)}\n`;
