@@ -38,8 +38,19 @@ export interface FileSpecInput {
    * Insertion-ordered map of `default` + regex patterns to content.
    * Regex keys are matched (anchored, full-match) against the workspace
    * directory path relative to the repo root, e.g. `libs/.*-application`.
+   * A rule value of `null` opts the matched workspaces out of the file
+   * (only meaningful when `default` is set).
    */
   rules: Record<string, JsonValue | string | null>;
+  /**
+   * Regular expressions (same syntax as rule keys, full match against the
+   * workspace directory) for workspaces that must NEVER receive this file.
+   * A hard opt-out: it beats `default` and every rule, at any position.
+   * Prefer directory/naming families (`packages/mq-.*`,
+   * `packages/.*-medicine-quotation-sdk`) over name lists, so new projects
+   * joining the family stay excluded without editing anything.
+   */
+  exclude?: string[];
 }
 
 /**
@@ -54,7 +65,8 @@ export interface LoomConfigInput {
 export interface CompiledRule {
   pattern: string;
   regex: RegExp;
-  value: JsonValue | string;
+  /** `null` marks an opt-out rule: matched workspaces get no file. */
+  value: JsonValue | string | null;
 }
 
 export interface CompiledFileEntry {
@@ -68,6 +80,8 @@ export interface CompiledFileEntry {
   defaultValue: JsonValue | string | null;
   /** Non-default rules, in declaration order. */
   rules: CompiledRule[];
+  /** Compiled per-file `exclude` patterns: hard opt-out, beats everything. */
+  exclude: RegExp[];
 }
 
 export interface LoomConfig {
@@ -75,7 +89,7 @@ export interface LoomConfig {
   files: Record<string, CompiledFileEntry>;
 }
 
-export type ItemStatus = 'created' | 'updated' | 'unchanged';
+export type ItemStatus = 'created' | 'updated' | 'unchanged' | 'deleted';
 
 export interface SyncItem {
   workspace: string;
@@ -91,4 +105,6 @@ export interface SyncResult {
   updated: number;
   unchanged: number;
   skipped: number;
+  /** Generated files removed because a later opt-out (`null`) rule matched. */
+  deleted: number;
 }

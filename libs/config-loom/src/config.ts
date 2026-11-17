@@ -116,9 +116,24 @@ export function compileRules(
         continue; // opt-in mode: workspaces only get the file when a rule matches
       }
     } else if (value === null) {
-      errors.push(
-        `files["${file}"]: rule "${key}" cannot be null — only "default" may be null`,
-      );
+      // Opt-out rule: workspaces matched by this pattern get NO file, even
+      // when `default` would otherwise give them one. A later rule may win
+      // again (declaration order, later rules win — like every other merge).
+      try {
+        new RegExp(key);
+      } catch (e) {
+        errors.push(
+          `files["${file}"]: rule "${key}" is not a valid regular expression: ${
+            (e as Error).message
+          }`,
+        );
+        continue;
+      }
+      compiled.push({
+        pattern: key,
+        regex: new RegExp(`^(?:${key})$`),
+        value: null,
+      });
       continue;
     } else {
       try {
@@ -219,7 +234,31 @@ export function compileConfig(
     }
     const banner = resolveBanner(file, format, spec.banner, errors);
     const compiledRules = compileRules(file, format, spec.rules, errors);
-    files[file] = { file, format, arrays, banner, ...compiledRules };
+    const exclude: RegExp[] = [];
+    if (spec.exclude !== undefined) {
+      if (!Array.isArray(spec.exclude)) {
+        errors.push(`files["${file}"]: "exclude" must be an array of strings`);
+      } else {
+        for (const key of spec.exclude) {
+          if (typeof key !== 'string') {
+            errors.push(`files["${file}"]: exclude pattern must be a string`);
+            continue;
+          }
+          try {
+            new RegExp(key);
+          } catch (e) {
+            errors.push(
+              `files["${file}"]: exclude "${key}" is not a valid regular expression: ${
+                (e as Error).message
+              }`,
+            );
+            continue;
+          }
+          exclude.push(new RegExp(`^(?:${key})$`));
+        }
+      }
+    }
+    files[file] = { file, format, arrays, banner, exclude, ...compiledRules };
   }
 
   if ('workspaces' in input) {

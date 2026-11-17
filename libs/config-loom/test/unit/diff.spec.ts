@@ -32,10 +32,13 @@ describe('computeDelta', () => {
     });
   });
 
-  it('falls back to the full value when a default key would be removed', () => {
-    const base = { compilerOptions: { strict: true, target: 'es2023' } };
-    const target = { compilerOptions: { strict: true } };
-    expect(computeDelta(base, target)).toEqual({ kind: 'full', value: target });
+  it('marks removed default keys as merge-patch nulls', () => {
+    const base = { a: 1, b: { c: 2, d: 3 } };
+    const target = { a: 1, b: { c: 2 } };
+    expect(computeDelta(base, target)).toEqual({
+      kind: 'delta',
+      value: { b: { d: null } },
+    });
   });
 
   it('overrides whole arrays when they differ', () => {

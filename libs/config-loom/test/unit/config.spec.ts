@@ -1,5 +1,6 @@
 import { compileConfig, loadConfig } from '../../src/config';
 import { LoomError } from '../../src/errors';
+import { renderFile } from '../../src/render';
 import { putFile, makeTempDir } from '../helpers';
 import type { LoomConfigInput } from '../../src/types';
 
@@ -123,7 +124,7 @@ describe('compileConfig', () => {
     ]);
   });
 
-  it('accepts default: null (opt-in mode) but not null rules', () => {
+  it('accepts default: null (opt-in mode) and null opt-out rules', () => {
     const config = compileConfig(
       { files: { 'a.json': { rules: { default: null, 'apps/x': { a: 1 } } } } },
       'test',
@@ -132,12 +133,17 @@ describe('compileConfig', () => {
     if (!entry) throw new Error('missing entry');
     expect(entry.hasDefault).toBe(true);
     expect(entry.defaultValue).toBeNull();
-    expect(() =>
-      compileConfig(
-        { files: { 'a.json': { rules: { default: {}, 'apps/x': null } } } },
-        'test',
-      ),
-    ).toThrow(/cannot be null/);
+
+    // A null rule is a legal opt-out: it compiles and makes renderFile skip.
+    const opted = compileConfig(
+      { files: { 'a.json': { rules: { default: { a: 1 }, 'apps/x': null } } } },
+      'test',
+    );
+    const optedEntry = opted.files['a.json'];
+    if (!optedEntry) throw new Error('missing entry');
+    expect(optedEntry.rules.map((rule) => rule.pattern)).toEqual(['apps/x']);
+    expect(renderFile(optedEntry, 'apps/x')).toBeNull();
+    expect(renderFile(optedEntry, 'apps/y')).toContain('"a": 1');
   });
 
   it('requires a banner string (not true) on text files and rejects it on json', () => {

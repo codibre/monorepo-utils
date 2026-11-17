@@ -34,8 +34,9 @@ function deltaOf(base: JsonValue, target: JsonValue): DeltaResult {
     const patch: Record<string, JsonValue> = {};
     for (const key of Object.keys(baseObj)) {
       if (!(key in targetObj)) {
-        // Removals are not expressible with a deep-merge patch.
-        return { kind: 'full', value: target };
+        // JSON Merge Patch (RFC 7386): null removes the inherited key.
+        patch[key] = null;
+        continue;
       }
       const inner = deltaOf(
         baseObj[key] as JsonValue,
@@ -61,8 +62,8 @@ function deltaOf(base: JsonValue, target: JsonValue): DeltaResult {
 }
 
 /**
- * Compute the minimal merge patch that turns `base` into `target`, or signal
- * that the full value is required.
+ * Compute the minimal merge patch that turns `base` into `target`
+ * (RFC 7386: nulls remove keys), or signal that the full value is required.
  */
 export function computeDelta(base: JsonValue, target: JsonValue): DeltaResult {
   return deltaOf(base, target);

@@ -49,7 +49,14 @@ export async function untrackFiles(
 
 export function buildGitignoreBlock(patterns: string[]): string {
   const body = [...patterns].sort();
-  return `${GITIGNORE_BEGIN}\n${body.join('\n')}\n${GITIGNORE_END}\n`;
+  const header = [
+    GITIGNORE_BEGIN,
+    '# Patterns synthesized by `config-loom init` from the pnpm workspace',
+    '# globs; wildcards are intentional so new projects are covered without',
+    "# editing this file. Hand-edit config-loom.jsonc; 'config-loom init",
+    '# --force' + "' regenerates the block.",
+  ];
+  return `${header.join('\n')}\n${body.join('\n')}\n${GITIGNORE_END}\n`;
 }
 
 /**

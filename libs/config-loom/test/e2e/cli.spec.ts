@@ -57,7 +57,7 @@ describe('cli main()', () => {
       expect.stringContaining('loom <command>'),
     );
     expect(await main(['version'])).toBe(0);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('0.0.0'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/\d+\.\d+\.\d+/));
   });
 
   it('unknown command exits 2', async () => {

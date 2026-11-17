@@ -1,7 +1,7 @@
 import { renderFile } from './render';
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces } from './workspaces';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ItemStatus, LoomConfig, SyncItem, SyncResult } from './types';
 
@@ -34,16 +34,38 @@ export async function syncAll(
     updated: 0,
     unchanged: 0,
     skipped: 0,
+    deleted: 0,
   };
 
   for (const workspace of workspaces) {
     for (const entry of Object.values(config.files)) {
       const content = renderFile(entry, workspace);
+      const target = path.join(root, workspace, entry.file);
       if (content === null) {
-        result.skipped += 1;
+        // The workspace opted out (default: null, or a null rule matched).
+        // Remove a file WE generated earlier — authorship is proven by the
+        // banner; a file we cannot prove generated is never touched.
+        const current = await readOrNull(target);
+        if (
+          entry.banner !== false &&
+          current !== null &&
+          current.startsWith(entry.banner)
+        ) {
+          if (!options.dryRun) {
+            await unlink(target);
+          }
+          result.deleted += 1;
+          result.items.push({
+            workspace,
+            file: entry.file,
+            status: 'deleted',
+            path: target,
+          });
+        } else {
+          result.skipped += 1;
+        }
         continue;
       }
-      const target = path.join(root, workspace, entry.file);
       const current = await readOrNull(target);
       let status: ItemStatus;
       if (current === null) {

@@ -1,9 +1,10 @@
 import { LoomError } from './errors';
 import { execFile } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import picomatch from 'picomatch';
+import { parse as parseYaml } from 'yaml';
 
 const execFileAsync = promisify(execFile);
 
@@ -84,4 +85,36 @@ export async function discoverWorkspaces(
     );
   }
   return kept.sort();
+}
+
+/**
+ * Raw `packages:` entries from pnpm-workspace.yaml, in declaration order
+ * (negations kept as-is, trailing slashes trimmed). These are the shapes
+ * where NEW projects can appear, which is exactly what pattern synthesis
+ * wants to mirror. Returns `[]` when the file is missing or unparseable —
+ * callers then fall back to narrower patterns.
+ */
+export async function readWorkspaceGlobs(root: string): Promise<string[]> {
+  let text: string;
+  try {
+    text = await readFile(path.join(root, 'pnpm-workspace.yaml'), 'utf8');
+  } catch {
+    return [];
+  }
+  try {
+    const data = parseYaml(text) as unknown;
+    const packages =
+      data !== null && typeof data === 'object'
+        ? (data as { packages?: unknown }).packages
+        : undefined;
+    if (!Array.isArray(packages)) {
+      return [];
+    }
+    return packages
+      .filter((glob): glob is string => typeof glob === 'string')
+      .map((glob) => glob.trim().replace(/\/+$/, ''))
+      .filter((glob) => glob !== '');
+  } catch {
+    return [];
+  }
 }

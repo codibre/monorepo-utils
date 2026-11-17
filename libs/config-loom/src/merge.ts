@@ -25,6 +25,12 @@ function mergeValues(
   if (isPlainObject(base) && isPlainObject(patch)) {
     const out: JsonObject = { ...base };
     for (const [key, value] of Object.entries(patch)) {
+      // JSON Merge Patch (RFC 7386): a null in the patch removes the key,
+      // so a rule can drop something inherited from `default`.
+      if (value === null) {
+        delete out[key];
+        continue;
+      }
       out[key] = mergeValues(base[key], value, policy);
     }
     return out;
@@ -35,7 +41,9 @@ function mergeValues(
 /**
  * Recursive merge used to apply each matching rule over the accumulated value.
  * Objects merge key-by-key; arrays follow the file's {@link ArrayPolicy};
- * anything else is overwritten by the patch.
+ * a null value inside an object removes that key (RFC 7386); anything else
+ * is overwritten by the patch. (A rule whose WHOLE value is null is handled
+ * earlier: it opts the matched workspaces out of the file entirely.)
  */
 export function deepMerge(
   base: JsonValue,

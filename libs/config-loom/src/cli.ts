@@ -119,11 +119,12 @@ function printSync(result: SyncResult, verbose: boolean): void {
       }
       continue;
     }
-    const mark = item.status === 'created' ? '+' : '~';
+    const mark =
+      item.status === 'created' ? '+' : item.status === 'deleted' ? 'x' : '~';
     console.log(`  ${mark} ${item.workspace}/${item.file}`);
   }
   console.log(
-    `created ${result.created}, updated ${result.updated}, unchanged ${result.unchanged}, skipped ${result.skipped}`,
+    `created ${result.created}, updated ${result.updated}, unchanged ${result.unchanged}, skipped ${result.skipped}, deleted ${result.deleted}`,
   );
 }
 
@@ -188,7 +189,12 @@ export async function main(
             `loom check failed — ${drift.length} file(s) out of sync:`,
           );
           for (const item of drift) {
-            const mark = item.status === 'created' ? 'missing ' : 'outdated ';
+            const mark =
+              item.status === 'created'
+                ? 'missing '
+                : item.status === 'deleted'
+                  ? 'stale   '
+                  : 'outdated';
             console.error(`  ${mark} ${item.workspace}/${item.file}`);
           }
           console.error("run 'config-loom sync' to fix");
@@ -243,6 +249,10 @@ export async function main(
             console.log(`#   ${file}`);
           }
           console.log(`# git rm --cached: ${result.untracked.length} file(s)`);
+          console.log('# .gitignore block:');
+          for (const pattern of result.ignorePatterns) {
+            console.log(`#   ${pattern}`);
+          }
           if (result.wire) {
             console.log('# wiring:');
             printWire(result.wire);
