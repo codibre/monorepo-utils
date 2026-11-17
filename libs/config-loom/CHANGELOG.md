@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.2.0...config-loom%400.3.0) (2026-11-17)
+
+### Features
+
+* **config-loom:** generalize rule keys with directory shapes, guards and composites ([ed1a80b](https://github.com/codibre/monorepo-utils/commit/ed1a80bc356bcb48cbf4ab9809562c56365d8420))
+* **config-loom:** text entries collapse into default + exclude too ([8ff7995](https://github.com/codibre/monorepo-utils/commit/8ff7995818393eb001ecadc76591cb6e50526315))
+
+### Bug Fixes
+
+* **config-loom:** tsconfig renders strict JSON; render-match proves deletion authorship ([a2837f1](https://github.com/codibre/monorepo-utils/commit/a2837f11256d642fae28536948af83d175c9eccf))
+
 ## [0.2.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.1.3...config-loom%400.2.0) (2026-11-17)
 
 ### Features
