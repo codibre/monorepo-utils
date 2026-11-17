@@ -28,20 +28,33 @@ export type FileFormat = 'json' | 'jsonc' | 'text';
 export type ArrayPolicy = 'replace' | 'concat' | 'unique';
 
 /**
- * One generated file, as written in config-loom.json before compilation.
+ * One rule as written in config-loom.yaml: a `pattern` prop plus its
+ * `value`. The literal pattern `default` is the base content; any other
+ * pattern is a regex matched (anchored, full match) against the workspace
+ * directory path relative to the repo root, e.g. `libs/.*-application`.
+ * A `value` of `null` (or absent) opts the matched workspaces out of the
+ * file (only meaningful when a `default` exists).
+ */
+export interface RuleInput {
+  pattern: string;
+  value?: JsonValue | string | null;
+}
+
+/**
+ * One generated file, as written in config-loom.yaml before compilation.
  */
 export interface FileSpecInput {
   format?: FileFormat;
   arrays?: ArrayPolicy;
   banner?: string | boolean;
   /**
-   * Insertion-ordered map of `default` + regex patterns to content.
-   * Regex keys are matched (anchored, full-match) against the workspace
-   * directory path relative to the repo root, e.g. `libs/.*-application`.
-   * A rule value of `null` opts the matched workspaces out of the file
-   * (only meaningful when `default` is set).
+   * Ordered list of `{ pattern, value }` rules; the literal `default`
+   * pattern is the base and later rules win over earlier ones (specific
+   * props beat `default`). A rule value of `null` opts its matches out of
+   * the file. A legacy insertion-ordered map of `default` + regex keys to
+   * content is still accepted on read for pre-YAML configs.
    */
-  rules: Record<string, JsonValue | string | null>;
+  rules: RuleInput[] | Record<string, JsonValue | string | null>;
   /**
    * Regular expressions (same syntax as rule keys, full match against the
    * workspace directory) for workspaces that must NEVER receive this file.
@@ -54,7 +67,7 @@ export interface FileSpecInput {
 }
 
 /**
- * config-loom.json as read from disk (comments allowed).
+ * config-loom.yaml as read from disk (comments allowed).
  */
 export interface LoomConfigInput {
   /** Globs of workspace directories to skip entirely. */

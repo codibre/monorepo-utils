@@ -4,6 +4,7 @@ import {
   defaultFormatFor,
 } from './config';
 import { computeDelta, tsconfigEqual } from './diff';
+import { stringify } from 'yaml';
 import { LoomError } from './errors';
 import {
   isGitRepo,
@@ -77,7 +78,7 @@ export interface InitOptions {
   files?: string[];
   /** Leave existing files on disk (they will just be overwritten by sync). */
   keep?: boolean;
-  /** Overwrite an existing config-loom.json. */
+  /** Overwrite an existing config (a legacy JSON one is converted to config-loom.yaml). */
   force?: boolean;
   dryRun?: boolean;
   yes?: boolean;
@@ -971,18 +972,52 @@ export async function buildPlan(
 
 export function serializeConfig(config: LoomConfigInput): string {
   const header = [
-    '// Managed by config-loom.',
-    '// Rule keys are regular expressions matched (full match) against the',
-    '// workspace directory path. Order matters: rules merge top to bottom,',
-    '// later rules win (specific props beat `default`), and a rule whose',
-    '// value is null opts its matches out of the file. A null INSIDE a rule',
-    '// value removes an inherited key (JSON Merge Patch, RFC 7386). A',
-    '// per-file "exclude" list is a hard opt-out beating default and rules.',
-    '// Prefer directory-shaped keys (apps/[^/]+, libs/foo-.*) so new',
-    '// projects joining a shape need no edit here.',
-    "// After editing, run 'config-loom sync' (or any turbo command, once wired).",
+    '# Managed by config-loom.',
+    '# Each rule carries a `pattern` (the literal `default`, or a regular',
+    '# expression matched full against the workspace directory path) and a',
+    '# `value`. Order matters: rules merge top to bottom, later rules win',
+    '# (specific props beat `default`), and a rule whose value is null opts',
+    '# its matches out of the file. A null INSIDE a rule value removes an',
+    '# inherited key (JSON Merge Patch, RFC 7386). A per-file "exclude" list',
+    '# is a hard opt-out beating default and rules. Prefer directory-shaped',
+    '# patterns (apps/.*, libs/foo-.*) so new projects joining a shape need',
+    '# no edit here. Multiline text values use plain YAML block scalars.',
+    "# After editing, run 'config-loom sync' (or any turbo command, once wired).",
   ].join('\n');
-  return `${header}\n${JSON.stringify(config, null, 2)}\n`;
+  const files: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(config.files)) {
+    const out: Record<string, unknown> = {};
+    if (spec.format !== undefined) {
+      out.format = spec.format;
+    }
+    if (spec.arrays !== undefined) {
+      out.arrays = spec.arrays;
+    }
+    if (spec.banner !== undefined) {
+      out.banner = spec.banner;
+    }
+    // The wire form is a list of { pattern, value }; map input (legacy or
+    // internal buildPlan output) is converted, `default` first as usual.
+    out.rules = Array.isArray(spec.rules)
+      ? spec.rules.map((rule) => ({
+          pattern: rule.pattern,
+          value: rule.value ?? null,
+        }))
+      : Object.entries(spec.rules).map(([pattern, value]) => ({
+          pattern,
+          value: value ?? null,
+        }));
+    if (spec.exclude !== undefined) {
+      out.exclude = spec.exclude;
+    }
+    files[name] = out;
+  }
+  const wire: Record<string, unknown> = {};
+  if (config.exclude && config.exclude.length > 0) {
+    wire.exclude = config.exclude;
+  }
+  wire.files = files;
+  return `${header}\n${stringify(wire, { lineWidth: 0, indent: 2 })}`;
 }
 
 async function findExistingConfig(root: string): Promise<string | null> {
@@ -1009,7 +1044,8 @@ async function ask(question: string): Promise<string> {
 }
 
 /**
- * Full init flow: build the plan, write config-loom.json, drop the scattered
+ * Full init flow: build the plan, write config-loom.yaml (converting a
+ * legacy JSON config), drop the scattered
  * originals from git and disk, add them to .gitignore and regenerate
  * everything with sync.
  */
@@ -1025,8 +1061,9 @@ export async function initRepo(
   }
   const plan = await buildPlan(root, opts);
   const globs = opts.globs ?? (await readWorkspaceGlobs(root));
-  const configPath =
-    existing ?? path.join(root, DEFAULT_CONFIG_FILENAMES[0] as string);
+  // The canonical name is always the YAML one; a legacy JSON config found
+  // on disk is converted (rewritten below, then removed).
+  const configPath = path.join(root, DEFAULT_CONFIG_FILENAMES[0] as string);
 
   if (opts.dryRun) {
     const gitRepo = await isGitRepo(root);
@@ -1064,6 +1101,12 @@ export async function initRepo(
   }
 
   await writeFile(configPath, serializeConfig(plan.config), 'utf8');
+  // Conversion: drop the legacy JSON config once the YAML one is in place.
+  const legacy =
+    existing && existing !== configPath ? path.relative(root, existing) : null;
+  if (legacy !== null) {
+    await unlink(path.join(root, legacy)).catch(() => undefined);
+  }
 
   const gitRepo = await isGitRepo(root);
   let untracked: string[] = [];
@@ -1071,6 +1114,9 @@ export async function initRepo(
   if (gitRepo) {
     const tracked = await listTrackedFiles(root);
     untracked = plan.managedFiles.filter((file) => tracked.has(file));
+    if (legacy !== null && tracked.has(legacy)) {
+      untracked = [...untracked, legacy];
+    }
     await untrackFiles(root, untracked);
     ignorePatterns = synthesizeIgnoreList(plan.managedEntries, globs, tracked);
     await updateGitignoreBlock(root, ignorePatterns);

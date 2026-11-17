@@ -4,6 +4,18 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import { parse as parseYaml } from 'yaml';
 import type { WorkspaceRunner } from '../src/workspaces';
+import type { FileSpecInput, JsonValue } from '../src/types';
+
+/**
+ * buildPlan emits rules as an insertion-ordered map (pattern -> value);
+ * the YAML wire form is a list of { pattern, value }. Tests asserting on
+ * buildPlan output read the map through this cast.
+ */
+export function ruleMap(
+  spec: Pick<FileSpecInput, 'rules'>,
+): Record<string, JsonValue | string | null> {
+  return spec.rules as Record<string, JsonValue | string | null>;
+}
 
 export async function makeTempDir(prefix = 'config-loom-'): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), prefix));

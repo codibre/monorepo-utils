@@ -1,5 +1,5 @@
 import { main } from '../../src/cli';
-import { compileConfig } from '../../src/config';
+import { loadConfig } from '../../src/config';
 import { syncAll } from '../../src/sync';
 import {
   createWorkspace,
@@ -9,10 +9,7 @@ import {
 } from '../helpers';
 
 async function loadFrom(root: string) {
-  const { readFile } = await import('node:fs/promises');
-  const path = await import('node:path');
-  const text = await readFile(path.join(root, 'config-loom.json'), 'utf8');
-  return { config: compileConfig(JSON.parse(text), 'config-loom.json') };
+  return await loadConfig(root);
 }
 
 async function makeRepoWithLoom(): Promise<string> {
@@ -93,7 +90,7 @@ describe('cli main()', () => {
     ).toBe(0);
   });
 
-  it('sync without a config-loom.json fails with a useful message', async () => {
+  it('sync without a config fails with a useful message', async () => {
     const root = await makeTempDir();
     expect(
       await main(['sync', '--root', root], { runner: fakePnpmRunner }),

@@ -209,3 +209,94 @@ describe('loadConfig', () => {
     await expect(loadConfig(root)).rejects.toThrow(/loom init/);
   });
 });
+
+describe('loadConfig — YAML wire (pattern prop)', () => {
+  it('reads config-loom.yaml with { pattern, value } rules', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      [
+        'files:',
+        '  eslint.config.mjs:',
+        '    format: text',
+        '    rules:',
+        '      - pattern: default',
+        '        value: |',
+        "          import base from '@repo/eslint';",
+        '          export default base;',
+        '      - pattern: apps/.*-front',
+        '        value: |',
+        "          import front from '@repo/eslint-front';",
+        '          export default front;',
+        '      - pattern: libs/legacy',
+      ].join('\n'),
+    );
+    const { config, path } = await loadConfig(root);
+    expect(path).toContain('config-loom.yaml');
+    const entry = config.files['eslint.config.mjs'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.defaultValue).toBe(
+      "import base from '@repo/eslint';\nexport default base;\n",
+    );
+    expect(entry.rules).toHaveLength(2);
+    expect(entry.rules[0]?.value).toBe(
+      "import front from '@repo/eslint-front';\nexport default front;\n",
+    );
+    // a rule without `value` is an opt-out
+    expect(entry.rules[1]?.value).toBeNull();
+  });
+
+  it('keeps the legacy map wire working', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      [
+        'files:',
+        '  tsconfig.json:',
+        '    rules:',
+        '      default:',
+        '        compilerOptions:',
+        '          strict: true',
+      ].join('\n'),
+    );
+    const { config } = await loadConfig(root);
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.defaultValue).toEqual({ compilerOptions: { strict: true } });
+  });
+
+  it('rejects unknown props on a rule entry', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      [
+        'files:',
+        '  tsconfig.json:',
+        '    rules:',
+        '      - pattern: default',
+        '        value: {}',
+        '        when: apps/x',
+      ].join('\n'),
+    );
+    await expect(loadConfig(root)).rejects.toThrow(
+      /only "pattern" and "value" are allowed/,
+    );
+  });
+
+  it('rejects rule entries that are not { pattern } objects', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      ['files:', '  tsconfig.json:', '    rules:', '      - default'].join(
+        '\n',
+      ),
+    );
+    await expect(loadConfig(root)).rejects.toThrow(
+      /must be an object with a "pattern" prop/,
+    );
+  });
+});
