@@ -49,7 +49,9 @@ export function defaultFormatFor(file: string): FileFormat {
     return 'jsonc';
   }
   // tsconfig/jsconfig: tsc parses comments and VS Code treats exactly
-  // these names as jsonc, so a banner is safe and welcome.
+  // these names as jsonc. They stay jsonc for INPUT tolerance, but the
+  // banner defaults off (defaultBannerFor): real-world configs do
+  // require('tsconfig.json'), and Node's JSON loader is strict.
   if (base === 'tsconfig.json' || base === 'jsconfig.json') {
     return 'jsonc';
   }
@@ -61,6 +63,15 @@ export function defaultFormatFor(file: string): FileFormat {
   return 'text';
 }
 
+/** Whether a spec without an explicit `banner` gets one. */
+export function defaultBannerFor(file: string): boolean {
+  const base = file.split('/').pop() ?? file;
+  // A file named *.jsonc opted into comments by name; tsconfig/jsconfig
+  // did not, and tools routinely JSON.parse them (jest configs, webpack,
+  // pnpm manifests…) — never banner them by default.
+  return base === 'tsconfig.json' || base === 'jsconfig.json' ? false : true;
+}
+
 function resolveBanner(
   file: string,
   format: FileFormat,
@@ -68,7 +79,7 @@ function resolveBanner(
   errors: string[],
 ): string | false {
   if (banner === undefined || banner === true) {
-    if (format === 'jsonc') {
+    if (format === 'jsonc' && (banner === true || defaultBannerFor(file))) {
       return `/* ${DEFAULT_BANNER_TEXT} */`;
     }
     if (banner === true && format === 'text') {

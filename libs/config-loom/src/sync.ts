@@ -1,4 +1,4 @@
-import { renderFile } from './render';
+import { renderCandidates, renderFile } from './render';
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces } from './workspaces';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
@@ -43,14 +43,18 @@ export async function syncAll(
       const target = path.join(root, workspace, entry.file);
       if (content === null) {
         // The workspace opted out (default: null, or a null rule matched).
-        // Remove a file WE generated earlier — authorship is proven by the
-        // banner; a file we cannot prove generated is never touched.
+        // Remove a file WE generated earlier — never one we cannot prove
+        // we wrote. Authorship is proven by the banner prefix, or (json/
+        // jsonc only) by byte-equality with a canonical render this loom
+        // could have produced: canonical JSON is distinctive enough, plain
+        // text is not.
         const current = await readOrNull(target);
-        if (
-          entry.banner !== false &&
+        const provable =
           current !== null &&
-          current.startsWith(entry.banner)
-        ) {
+          ((entry.banner !== false && current.startsWith(entry.banner)) ||
+            (entry.format !== 'text' &&
+              renderCandidates(entry).includes(current)));
+        if (provable) {
           if (!options.dryRun) {
             await unlink(target);
           }

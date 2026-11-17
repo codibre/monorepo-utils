@@ -92,13 +92,13 @@ describe('syncAll', () => {
     expect(eslintLib).toContain('@repo/eslint-config');
   });
 
-  it('starts jsonc files with the banner and keeps them tsc-parseable', async () => {
+  it('renders tsconfig as strict require()-safe JSON, no banner', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
     await syncAll(config, root, { runner: fakePnpmRunner });
     const raw = await getRel(root, 'libs/math/tsconfig.json');
-    expect(raw.split('\n')[0]).toContain('config-loom');
-    expect(() => parseJsonc(raw, 'tsconfig.json')).not.toThrow();
+    expect(raw.split('\n')[0]).not.toContain('config-loom');
+    expect(() => JSON.parse(raw)).not.toThrow();
   });
 
   it('is idempotent: second run changes nothing', async () => {

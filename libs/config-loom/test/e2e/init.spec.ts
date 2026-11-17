@@ -1,6 +1,6 @@
 import { buildPlan, initRepo, serializeConfig } from '../../src/init';
 import { GITIGNORE_BEGIN } from '../../src/git';
-import { loadConfig } from '../../src/config';
+import { loadConfig, compileConfig } from '../../src/config';
 import { checkAll } from '../../src/check';
 import { syncAll } from '../../src/sync';
 import {
@@ -145,7 +145,7 @@ describe('loom init', () => {
     expect(result.sync && result.sync.created > 0).toBe(true);
   });
 
-  it('partial coverage forces default: null so untouched workspaces get no file', async () => {
+  it('partial coverage collapses into default + exclude when the missing set is compact', async () => {
     const root = await makeScatteredRepo();
     const plan = await buildPlan(root, {
       runner: fakePnpmRunner,
@@ -153,8 +153,27 @@ describe('loom init', () => {
     });
     const spec = plan.config.files['eslint.config.mjs'];
     if (!spec) throw new Error('missing entry');
-    expect(spec.rules.default).toBeNull();
-    expect(Object.keys(spec.rules)).toHaveLength(3); // null + two flavors
+    // Majority flavor becomes the default; the minority keeps a rule; the
+    // workspaces without the file collapse into an exclude family.
+    expect(spec.rules.default).toBe(
+      "export { default } from '@repo/eslint-config';\n",
+    );
+    expect(Object.keys(spec.rules)).toHaveLength(2); // default + front flavor
+    expect(spec.exclude).toEqual(['apps/api|apps/web', 'libs/.*']);
+
+    // file placement: only the two present workspaces ever get the file
+    const config = { files: { 'eslint.config.mjs': spec } };
+    await syncAll(compileConfig(config, 'test'), root, {
+      runner: fakePnpmRunner,
+    });
+    expect(await getRel(root, 'apps/admin/eslint.config.mjs')).toContain(
+      "'@repo/eslint-config'",
+    );
+    expect(await getRel(root, 'apps/portal/eslint.config.mjs')).toContain(
+      'front',
+    );
+    await expect(getRel(root, 'apps/api/eslint.config.mjs')).rejects.toThrow();
+    await expect(getRel(root, 'libs/ui/eslint.config.mjs')).rejects.toThrow();
   });
 
   it('jsonc partial coverage gets a real default plus a compact exclude', async () => {

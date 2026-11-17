@@ -58,6 +58,13 @@ const MIN_SHARED_PREFIX = 6;
 // An `exclude` list only beats enumerating names while it stays small.
 const MAX_EXCLUDE_PATTERNS = 4;
 const MAX_EXCLUDE_ALTERNATION = 3;
+// A `(?!…)` guard silently hands the rule to every FUTURE sibling of the
+// directory, so it must be clearly shorter than the alternatives to earn that
+// aggressiveness. A ROOT-level guard reaches the whole repository, so it must
+// be MUCH shorter; per-directory composites stay the preferred general shape.
+const GUARD_HANDICAP = 12;
+const ROOT_GUARD_HANDICAP = 24;
+const MAX_EXCLUSION_EXCEPTIONS = 12;
 
 interface Cluster {
   normalized: string;
@@ -255,15 +262,6 @@ function bestFamily(keysPerName: string[][], minLength: number): string | null {
 }
 
 /**
- * Derive a regex for a cluster that matches EXACTLY its members among all
- * current workspaces. Candidates, shortest first: shared parent dir + name
- * alternation, common name suffix/prefix, whole-directory shapes
- * (`P/[^/]+`, `P/.*`) and pnpm workspace globs translated to regex. Only
- * patterns validated against the current workspace set are accepted, so the
- * result never over-matches TODAY; directory-shaped candidates are the point
- * because they keep matching TOMORROW, when a new project joins the shape.
- */
-/**
  * Collapse workspaces that LACK a file into a few directory/naming-family
  * regexes usable as a file-level `exclude` list (see FileSpecInput.exclude).
  *
@@ -374,6 +372,178 @@ export function synthesizeExclude(
   return out;
 }
 
+/** Sort metric for candidate patterns: plain length, handicapping the
+ * exclusion guards (see GUARD_HANDICAP) so they only win when clearly
+ * shorter; ties go to the wildcard shape (it survives tomorrow's siblings). */
+function candidateCost(pattern: string): number {
+  const handicap = pattern.startsWith('(?!')
+    ? ROOT_GUARD_HANDICAP
+    : pattern.includes('(?!')
+      ? GUARD_HANDICAP
+      : 0;
+  return pattern.length + handicap;
+}
+
+function rankCandidates(a: string, b: string): number {
+  return (
+    candidateCost(a) - candidateCost(b) ||
+    (a.includes('*') ? 0 : 1) - (b.includes('*') ? 0 : 1)
+  );
+}
+
+/**
+ * Shapes for a group of members sharing one parent directory, loosest first:
+ * - whole subtree covered -> `dir/.*`;
+ * - directory minus a few siblings -> `dir/(?!ex1$|ex2$).*` — keeps matching
+ *   when new projects join the directory, which is exactly what a long name
+ *   list can never do;
+ * - the explicit (non-capturing) name list as the tight fallback.
+ */
+function scopedGroupCandidates(
+  parent: string,
+  memberPaths: string[],
+  allWorkspaces: string[],
+): string[] {
+  const rawPrefix = parent === '' ? '' : `${parent}/`;
+  const escParent = parent === '' ? '' : `${escapeRegExp(parent)}/`;
+  const memberSet = new Set(memberPaths);
+  const exceptions: string[] = [];
+  for (const workspace of allWorkspaces) {
+    if (!memberSet.has(workspace) && workspace.startsWith(rawPrefix)) {
+      exceptions.push(workspace.slice(rawPrefix.length));
+    }
+  }
+  const out: string[] = [];
+  if (exceptions.length === 0) {
+    out.push(`${escParent}.*`);
+  } else if (
+    exceptions.length <= memberPaths.length &&
+    exceptions.length <= MAX_EXCLUSION_EXCEPTIONS
+  ) {
+    out.push(
+      `${escParent}(?!${exceptions
+        .map((exc) => `${escapeRegExp(exc)}$`)
+        .join('|')}).*`,
+    );
+  }
+  const names = memberPaths.map(nameOf);
+  out.push(
+    names.length === 1
+      ? `${escParent}${escapeRegExp(names[0] as string)}`
+      : `${escParent}(?:${names.map((name) => escapeRegExp(name)).join('|')})`,
+  );
+  return out;
+}
+
+/**
+ * Join per-directory components with `|`, factoring the shared directory
+ * prefix once (`libs/(?:domain/x|shared/y)`) so long trees stay readable.
+ * When no common prefix spans every component the factoring recurses one
+ * directory level down (components under `libs/` collapse even while an
+ * unrelated `apps/.*` stands apart).
+ */
+function factorCommonDirectory(components: string[]): string {
+  if (components.length < 2) {
+    return components[0] as string;
+  }
+  const joined = components.join('|');
+  const lcp = longestCommonPrefix(components);
+  const cut = lcp.lastIndexOf('/');
+  if (cut > 0) {
+    const head = lcp.slice(0, cut);
+    if (!components.some((component) => component.length <= head.length + 1)) {
+      const rests = components.map((component) =>
+        component.slice(head.length + 1),
+      );
+      return `${head}/(?:${rests.join('|')})`;
+    }
+    return joined;
+  }
+  const buckets = new Map<string, string[]>();
+  for (const component of components) {
+    const slash = component.indexOf('/');
+    if (slash <= 0) {
+      return joined;
+    }
+    const key = component.slice(0, slash);
+    const bucket = buckets.get(key);
+    if (bucket) {
+      bucket.push(component);
+    } else {
+      buckets.set(key, [component]);
+    }
+  }
+  if (buckets.size === components.length) {
+    return joined;
+  }
+  return [...buckets.values()]
+    .map((bucket) => factorCommonDirectory(bucket))
+    .join('|');
+}
+
+/**
+ * Key for a cluster spanning several parent directories: every directory
+ * contributes its own best shape (`apps/.*|libs/(?:adapters/.*|shared/(?:a|b))`)
+ * instead of the whole cluster collapsing into one long full-path alternation.
+ */
+function compositeCandidate(
+  members: string[],
+  allWorkspaces: string[],
+): string | null {
+  const groups = new Map<string, string[]>();
+  for (const member of members) {
+    const parent = parentOf(member);
+    const bucket = groups.get(parent);
+    if (bucket) {
+      bucket.push(member);
+    } else {
+      groups.set(parent, [member]);
+    }
+  }
+  if (groups.size < 2) {
+    return null;
+  }
+  const components: string[] = [];
+  for (const [parent, memberPaths] of groups) {
+    const shapes = scopedGroupCandidates(parent, memberPaths, allWorkspaces);
+    shapes.sort(rankCandidates);
+    components.push(shapes[0] as string);
+  }
+  return factorCommonDirectory(components);
+}
+
+/**
+ * Cluster that covers (nearly) the whole repository: `(?!ex1$|ex2$).*` — the
+ * most compact key for "everything but these few".
+ */
+function globalExclusionCandidate(
+  members: string[],
+  allWorkspaces: string[],
+): string | null {
+  const memberSet = new Set(members);
+  const exceptions = allWorkspaces.filter((ws) => !memberSet.has(ws));
+  if (
+    exceptions.length === 0 ||
+    exceptions.length >= members.length ||
+    exceptions.length > MAX_EXCLUSION_EXCEPTIONS
+  ) {
+    return null;
+  }
+  return `(?!${exceptions.map((exc) => `${escapeRegExp(exc)}$`).join('|')}).*`;
+}
+
+/**
+ * Derive a regex for a cluster that matches EXACTLY its members among all
+ * current workspaces. Candidates, shortest first: shared parent dir + name
+ * alternation, common name suffix/prefix, whole-directory shapes
+ * (`P/[^/]+`, `P/.*`), directory-minus-few-siblings guards, a per-directory
+ * composite for clusters spanning several dirs, a root-level exclusion for
+ * near-total coverage, and pnpm workspace globs translated to regex. Only
+ * patterns validated against the current workspace set are accepted, so the
+ * result never over-matches TODAY; the directory-shaped candidates are the
+ * point because they keep matching TOMORROW, when a new project joins the
+ * shape.
+ */
 export function synthesizePattern(
   members: string[],
   allWorkspaces: string[],
@@ -419,7 +589,7 @@ export function synthesizePattern(
     const names = members.map((member) => nameOf(member));
     if (prefix !== '') {
       candidates.push(
-        `${prefix}/${names.map((name) => escapeRegExp(name)).join('|')}`,
+        `${prefix}/(?:${names.map((name) => escapeRegExp(name)).join('|')})`,
       );
     }
     const suffix = longestCommonSuffix(names);
@@ -460,8 +630,20 @@ export function synthesizePattern(
         candidates.push(`${prefix}/.*`);
       }
     }
+    for (const shape of scopedGroupCandidates(prefix, members, allWorkspaces)) {
+      candidates.push(shape);
+    }
+  } else {
+    const composite = compositeCandidate(members, allWorkspaces);
+    if (composite !== null) {
+      candidates.push(composite);
+    }
   }
-  candidates.sort((a, b) => a.length - b.length);
+  const globalExclusion = globalExclusionCandidate(members, allWorkspaces);
+  if (globalExclusion !== null) {
+    candidates.push(globalExclusion);
+  }
+  candidates.sort(rankCandidates);
   for (const candidate of candidates) {
     const regex = new RegExp(`^(?:${candidate})$`);
     const matched = allWorkspaces.filter((workspace) => regex.test(workspace));
@@ -592,9 +774,15 @@ export async function buildPlan(
     let fileExclude: string[] | undefined;
 
     if (format === 'text') {
-      // Text has no merge semantics: a default only makes sense when every
-      // workspace holds the file; otherwise stay opt-in (default: null).
-      if (fullCoverage) {
+      // Text has no merge semantics: a default applies wholesale to every
+      // workspace. Safe when every workspace holds the file, or when the
+      // workspaces lacking it collapse into a compact `exclude` family —
+      // same law as JSON below. Otherwise stay opt-in (`default: null`).
+      const excluded = fullCoverage
+        ? []
+        : synthesizeExclude(missing, present, workspaces);
+      const useDefault = fullCoverage || excluded !== null;
+      if (useDefault) {
         rules.default = mode.normalized;
         clusters.push({
           file,
@@ -605,7 +793,7 @@ export async function buildPlan(
       } else {
         rules.default = null;
       }
-      for (const cluster of fullCoverage ? sorted.slice(1) : sorted) {
+      for (const cluster of useDefault ? sorted.slice(1) : sorted) {
         const pattern = uniquePattern(
           rules,
           cluster.members,
@@ -618,6 +806,15 @@ export async function buildPlan(
           pattern,
           members: [...cluster.members],
           kind: 'full',
+        });
+      }
+      if (excluded && excluded.length > 0) {
+        fileExclude = excluded;
+        clusters.push({
+          file,
+          pattern: excluded.join(' | '),
+          members: [...missing],
+          kind: 'excluded',
         });
       }
     } else {

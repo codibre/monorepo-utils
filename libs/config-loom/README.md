@@ -7,7 +7,6 @@
   />
 </p>
 
-
 # config-loom
 
 > Eliminate config drift in pnpm + Turborepo monorepos.
@@ -87,9 +86,16 @@ pnpm exec config-loom init             # writes config-loom.jsonc, deletes the s
 `init` asks pnpm itself which projects exist (`pnpm -r exec pwd`), scans every workspace for known config
 files (`tsconfig.json`, `eslint.config.mjs`, `vitest.config.mts`,
 `jest.config.js`, `nest-cli.json`, …), clusters them by content, takes the
-majority content as `default`, and emits delta rules — grouped as regexes when
-possible (`libs/.*-application`), or as exact `apps/bff|apps/other`
-alternations — for each exception. Use `--files tsconfig.json,eslint.config.mjs`
+majority content as `default`, and emits delta rules for each exception. Rule
+keys are synthesized to stay short and future-proof instead of enumerating
+paths: naming families (`libs/.*-application`), whole directories
+(`apps/.*`), a directory minus a few siblings (`libs/adapters/(?!legacy-sql$|old-auth$).*`),
+and per-directory composites for clusters spanning several folders
+(`apps/.*|libs/(?:domain/x|shared/(?:a|b))`). Every candidate is validated
+against the current workspace set — a key never over-matches today — and the
+directory-shaped ones keep matching tomorrow, when a new project joins the
+folder. Only when nothing collapses does a key fall back to the exact
+`apps/bff|apps/other` alternation. Use `--files tsconfig.json,eslint.config.mjs`
 to restrict the scope.
 
 ### 3. Wire it up — one line (init does it for you)
@@ -157,11 +163,12 @@ gitignored files reappear — install already does.
 > squiggles. `config-loom.json` is still read (drop it in and it wins over
 > nothing — candidates are tried in order), you just have to live without
 > editor-endorsed comments there. Generated files follow the same law:
-> banners only where comments are safe for the toolchain and the IDE
-> (`tsconfig.json`/`jsconfig.json` get them; `nest-cli.json`,
-> `tsconfig.build.json` and friends render as strict JSON, no banner —
-> per-entry `"banner"` and `"format": "jsonc"` override if your tools
-> tolerate comments).
+> banners only where comments are safe for _every_ consumer — a file named
+> `*.jsonc` opted in by name and gets one. `tsconfig.json`/`jsconfig.json`
+> do **not**: tsc tolerates comments but `require('tsconfig.json')` (jest
+> configs, bundlers) is Node's strict JSON parser. Everything else renders
+> as strict JSON, no banner — per-entry `"banner": true|"<string>"` and
+> `"format": "jsonc"` override if your tools tolerate comments).
 
 Top level:
 
@@ -179,12 +186,12 @@ regardless: adding a project should re-run the generator.
 
 Per-file spec:
 
-| Key      | Default                                 | Meaning                                                                                        |
-| -------- | --------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `format` | `jsonc` for `.json`, `text` otherwise   | `json`, `jsonc` (comments tolerated when read, banner by default) or `text` (verbatim content) |
-| `arrays` | `replace`                               | What a rule's array does to the base array: `replace`, `concat` or `unique`                    |
-| `banner` | jsonc: warning comment; json/text: none | Header line. `false` disables; strings allowed for `jsonc`/`text`.                             |
-| `rules`  | required                                | `default` plus regex keys, in declaration order.                                               |
+| Key      | Default                                                                                 | Meaning                                                                     |
+| -------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `format` | `jsonc` for `tsconfig`/`jsconfig`/`*.jsonc`, `json` for other `.json`, `text` otherwise | `json`, `jsonc` (comments tolerated when read) or `text` (verbatim content) |
+| `arrays` | `replace`                                                                               | What a rule's array does to the base array: `replace`, `concat` or `unique` |
+| `banner` | `*.jsonc` only: warning comment; else none                                              | Header line. `false` disables; `true`/strings allowed for `jsonc`/`text`.   |
+| `rules`  | required                                                                                | `default` plus regex keys, in declaration order.                            |
 
 Rule semantics:
 
@@ -197,8 +204,10 @@ Rule semantics:
   follow `arrays`; everything else is overwritten.
 - For `text`, the **last matching rule replaces** the content entirely.
 - `"default": null` makes an entry opt-in: only workspaces hit by a rule get
-  the file. `init` uses this automatically when a file does not exist in every
-  workspace.
+  the file. When a file is missing from some workspaces, `init` prefers a
+  `default` + compact `exclude` family (new projects joining the excluded
+  family are ignored for free); it falls back to opt-in (`"default": null`)
+  only when the missing workspaces cannot be covered compactly.
 - Rule values must be objects (`json`/`jsonc`) or strings (`text`).
 
 ### What can never be generated

@@ -186,3 +186,124 @@ describe('synthesizePattern', () => {
     ]);
   });
 });
+
+// Issue #3: clusters spanning many subfolders used to fall back to one huge
+// full-path alternation. They must now collapse into per-directory shapes.
+describe('synthesizePattern generalization (issue #3)', () => {
+  const workspaces = [
+    'apps/bff',
+    'apps/gestao-vd-admin',
+    'apps/worker',
+    'libs/adapters/cache',
+    'libs/adapters/configcat',
+    'libs/adapters/s3',
+    'libs/adapters/sftp',
+    'libs/adapters/sqs',
+    'libs/adapters/storage',
+    'libs/adapters/database',
+    'libs/adapters/http',
+    'libs/domain/models',
+    'libs/domain/ports',
+    'libs/shared/datetime',
+    'libs/shared/validation',
+    'libs/shared/errors',
+  ];
+  const members = [
+    'apps/bff',
+    'apps/gestao-vd-admin',
+    'apps/worker',
+    'libs/adapters/cache',
+    'libs/adapters/configcat',
+    'libs/adapters/s3',
+    'libs/adapters/sftp',
+    'libs/adapters/sqs',
+    'libs/adapters/storage',
+    'libs/domain/models',
+    'libs/shared/datetime',
+    'libs/shared/validation',
+  ];
+
+  it('composes per-directory shapes instead of a full-path list', () => {
+    const pattern = synthesizePattern(members, workspaces);
+    const regex = new RegExp(`^(?:${pattern})$`);
+    expect(workspaces.filter((ws) => regex.test(ws)).sort()).toEqual(
+      [...members].sort(),
+    );
+    const raw = members.join('|');
+    expect(pattern.length).toBeLessThan(raw.length);
+    expect(pattern).toContain('apps/.*');
+    // adapters is a mostly-covered directory: the guard shape wins there.
+    expect(pattern).toContain('(?!database$|http$)');
+  });
+
+  it('a future sibling in a guarded directory joins without editing the key', () => {
+    const pattern = synthesizePattern(members, workspaces);
+    const regex = new RegExp(`^(?:${pattern})$`);
+    expect(regex.test('apps/future-app')).toBe(true);
+    expect(regex.test('libs/adapters/queue')).toBe(true);
+    expect(regex.test('libs/adapters/database')).toBe(false);
+    expect(regex.test('libs/adapters/http')).toBe(false);
+  });
+
+  it('factors the shared directory prefix once', () => {
+    const all = [
+      'libs/adapters/db',
+      'libs/adapters/cache',
+      'libs/domain/models',
+      'libs/domain/auth',
+      'libs/shared/logger',
+      'apps/web',
+    ];
+    const pattern = synthesizePattern(
+      ['libs/adapters/cache', 'libs/domain/models', 'libs/shared/logger'],
+      all,
+    );
+    expect(pattern.startsWith('libs/(?:')).toBe(true);
+    const regex = new RegExp(`^(?:${pattern})$`);
+    expect(all.filter((ws) => regex.test(ws)).sort()).toEqual([
+      'libs/adapters/cache',
+      'libs/domain/models',
+      'libs/shared/logger',
+    ]);
+  });
+
+  it('expresses near-total coverage as a root-level exclusion', () => {
+    // A small repository has compact per-directory shapes; the root guard
+    // only earns the key when the composite would be much longer.
+    const dirs: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      dirs.push(`group-${i}/project`);
+    }
+    const all = [...dirs, 'tools/exceptions-a', 'tools/exceptions-b'];
+    const pattern = synthesizePattern(dirs, all);
+    expect(pattern).toBe('(?!tools/exceptions-a$|tools/exceptions-b$).*');
+    // per-directory shapes are preferred when they are not much longer:
+    const small = ['apps/a', 'apps/b', 'libs/x', 'libs/y', 'libs/z'];
+    const composite = synthesizePattern(
+      ['apps/a', 'apps/b', 'libs/x', 'libs/y'],
+      small,
+    );
+    expect(composite.startsWith('(?!')).toBe(false);
+    const regex = new RegExp(`^(?:${composite})$`);
+    expect(small.filter((ws) => regex.test(ws)).sort()).toEqual([
+      'apps/a',
+      'apps/b',
+      'libs/x',
+      'libs/y',
+    ]);
+  });
+
+  it('keeps a naming-family key over a more aggressive guard', () => {
+    const all = [
+      'libs/auth-application',
+      'libs/billing-application',
+      'libs/ui',
+    ];
+    expect(
+      synthesizePattern(
+        ['libs/auth-application', 'libs/billing-application'],
+        all,
+      ),
+    ).toBe('libs/.*-application');
+  });
+});
