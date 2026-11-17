@@ -1,11 +1,9 @@
 import { compileConfig, loadConfig } from '../../src/config';
-import { StencilError } from '../../src/errors';
+import { LoomError } from '../../src/errors';
 import { putFile, makeTempDir } from '../helpers';
-import type { StencilConfigInput } from '../../src/types';
+import type { LoomConfigInput } from '../../src/types';
 
-function minimal(
-  overrides: Partial<StencilConfigInput> = {},
-): StencilConfigInput {
+function minimal(overrides: Partial<LoomConfigInput> = {}): LoomConfigInput {
   return {
     files: {
       'tsconfig.json': {
@@ -23,8 +21,16 @@ describe('compileConfig', () => {
     if (!entry) throw new Error('missing entry');
     expect(entry.format).toBe('jsonc');
     expect(entry.arrays).toBe('replace');
-    expect(entry.banner).toContain('turbo-stencil');
+    expect(entry.banner).toContain('config-loom');
     expect(entry.hasDefault).toBe(true);
+  });
+
+  it('rejects the legacy workspaces key', () => {
+    const legacy = {
+      ...minimal(),
+      workspaces: ['apps/*'],
+    } as unknown as LoomConfigInput;
+    expect(() => compileConfig(legacy, 'test')).toThrow(/not supported/);
   });
 
   it('defaults non-json files to text format without banner', () => {
@@ -146,16 +152,16 @@ describe('compileConfig', () => {
 });
 
 describe('loadConfig', () => {
-  it('reads stencil.json with comments', async () => {
+  it('reads loom.json with comments', async () => {
     const root = await makeTempDir();
     await putFile(
       root,
-      'stencil.json',
-      `// my stencil
+      'loom.json',
+      `// my loom
       { "files": { "tsconfig.json": { "rules": { "default": { "ok": true } } } } }`,
     );
     const { config, path } = await loadConfig(root);
-    expect(path).toContain('stencil.json');
+    expect(path).toContain('loom.json');
     const entry = config.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
     expect(entry.defaultValue).toEqual({ ok: true });
@@ -163,7 +169,7 @@ describe('loadConfig', () => {
 
   it('fails with a helpful error when absent', async () => {
     const root = await makeTempDir();
-    await expect(loadConfig(root)).rejects.toThrow(StencilError);
-    await expect(loadConfig(root)).rejects.toThrow(/stencil init/);
+    await expect(loadConfig(root)).rejects.toThrow(LoomError);
+    await expect(loadConfig(root)).rejects.toThrow(/loom init/);
   });
 });

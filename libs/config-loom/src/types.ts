@@ -28,7 +28,7 @@ export type FileFormat = 'json' | 'jsonc' | 'text';
 export type ArrayPolicy = 'replace' | 'concat' | 'unique';
 
 /**
- * One generated file, as written in stencil.json before compilation.
+ * One generated file, as written in loom.json before compilation.
  */
 export interface FileSpecInput {
   format?: FileFormat;
@@ -43,11 +43,9 @@ export interface FileSpecInput {
 }
 
 /**
- * stencil.json as read from disk (comments allowed).
+ * loom.json as read from disk (comments allowed).
  */
-export interface StencilConfigInput {
-  /** Workspace globs; defaults to pnpm-workspace.yaml / package.json workspaces. */
-  workspaces?: string[];
+export interface LoomConfigInput {
   /** Globs of workspace directories to skip entirely. */
   exclude?: string[];
   files: Record<string, FileSpecInput>;
@@ -72,8 +70,7 @@ export interface CompiledFileEntry {
   rules: CompiledRule[];
 }
 
-export interface StencilConfig {
-  workspaces: string[] | null;
+export interface LoomConfig {
   exclude: string[];
   files: Record<string, CompiledFileEntry>;
 }

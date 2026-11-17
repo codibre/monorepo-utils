@@ -1,16 +1,21 @@
 import { main } from '../../src/cli';
 import { compileConfig } from '../../src/config';
 import { syncAll } from '../../src/sync';
-import { createWorkspace, makeTempDir, putFile } from '../helpers';
+import {
+  createWorkspace,
+  fakePnpmRunner,
+  makeTempDir,
+  putFile,
+} from '../helpers';
 
 async function loadFrom(root: string) {
   const { readFile } = await import('node:fs/promises');
   const path = await import('node:path');
-  const text = await readFile(path.join(root, 'stencil.json'), 'utf8');
-  return { config: compileConfig(JSON.parse(text), 'stencil.json') };
+  const text = await readFile(path.join(root, 'loom.json'), 'utf8');
+  return { config: compileConfig(JSON.parse(text), 'loom.json') };
 }
 
-async function makeRepoWithStencil(): Promise<string> {
+async function makeRepoWithLoom(): Promise<string> {
   const root = await makeTempDir();
   await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
   await putFile(
@@ -21,7 +26,7 @@ async function makeRepoWithStencil(): Promise<string> {
   await createWorkspace(root, 'apps/api');
   await putFile(
     root,
-    'stencil.json',
+    'loom.json',
     JSON.stringify({
       files: {
         'tsconfig.json': {
@@ -49,7 +54,7 @@ describe('cli main()', () => {
   it('help and version exit 0', async () => {
     expect(await main(['help'])).toBe(0);
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('stencil <command>'),
+      expect.stringContaining('loom <command>'),
     );
     expect(await main(['version'])).toBe(0);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('0.0.0'));
@@ -63,38 +68,58 @@ describe('cli main()', () => {
   });
 
   it('sync then check exit 0', async () => {
-    const root = await makeRepoWithStencil();
-    expect(await main(['sync', '--root', root])).toBe(0);
-    expect(await main(['check', '--root', root])).toBe(0);
+    const root = await makeRepoWithLoom();
+    expect(
+      await main(['sync', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(0);
+    expect(
+      await main(['check', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(0);
   });
 
   it('check exits 1 when files are stale and sync repairs', async () => {
-    const root = await makeRepoWithStencil();
-    expect(await main(['check', '--root', root])).toBe(1);
+    const root = await makeRepoWithLoom();
+    expect(
+      await main(['check', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('out of sync'),
     );
-    expect(await main(['sync', '--root', root])).toBe(0);
-    expect(await main(['check', '--root', root])).toBe(0);
+    expect(
+      await main(['sync', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(0);
+    expect(
+      await main(['check', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(0);
   });
 
-  it('sync without a stencil.json fails with a useful message', async () => {
+  it('sync without a loom.json fails with a useful message', async () => {
     const root = await makeTempDir();
-    expect(await main(['sync', '--root', root])).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('stencil init'),
-    );
+    expect(
+      await main(['sync', '--root', root], { runner: fakePnpmRunner }),
+    ).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('loom init'));
   });
 
   it('dry-run writes nothing', async () => {
-    const root = await makeRepoWithStencil();
-    expect(await main(['sync', '--root', root, '--dry-run'])).toBe(0);
+    const root = await makeRepoWithLoom();
+    expect(
+      await main(['sync', '--root', root, '--dry-run'], {
+        runner: fakePnpmRunner,
+      }),
+    ).toBe(0);
     // same repo, programmatic check of the same invariant
     const { config } = await loadFrom(root);
-    const check = await syncAll(config, root, { dryRun: true });
+    const check = await syncAll(config, root, {
+      dryRun: true,
+      runner: fakePnpmRunner,
+    });
     expect(check.created).toBe(1);
-    await syncAll(config, root);
-    const after = await syncAll(config, root, { dryRun: true });
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    const after = await syncAll(config, root, {
+      dryRun: true,
+      runner: fakePnpmRunner,
+    });
     expect(after.created).toBe(0);
   });
 });

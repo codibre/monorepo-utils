@@ -4,6 +4,7 @@ import { loadConfig } from '../../src/config';
 import { checkAll } from '../../src/check';
 import {
   createWorkspace,
+  fakePnpmRunner,
   getRel,
   makeTempDir,
   putFile,
@@ -63,10 +64,13 @@ async function makeScatteredRepo(): Promise<string> {
   return root;
 }
 
-describe('stencil init', () => {
+describe('loom init', () => {
   it('builds a plan with clusters, default and delta rules', async () => {
     const root = await makeScatteredRepo();
-    const plan = await buildPlan(root, { files: ['tsconfig.json'] });
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
     const keys = Object.keys(spec.rules);
@@ -84,9 +88,9 @@ describe('stencil init', () => {
 
   it('runs the full flow: write config, gitignore, regenerate, check passes', async () => {
     const root = await makeScatteredRepo();
-    const result = await initRepo(root, { yes: true });
+    const result = await initRepo(root, { yes: true, runner: fakePnpmRunner });
 
-    // stencil.json exists and compiles
+    // loom.json exists and compiles
     const { config } = await loadConfig(root);
     expect(config.files['tsconfig.json']).toBeDefined();
     expect(config.files['eslint.config.mjs']).toBeDefined();
@@ -114,28 +118,33 @@ describe('stencil init', () => {
       'front',
     );
 
-    // git: files untracked + gitignore block present; stencil.json itself stays committable
+    // git: files untracked + gitignore block present; loom.json itself stays committable
     const { stdout: ls } = await run('git', ['ls-files'], { cwd: root });
     expect(ls).not.toContain('tsconfig.json');
     expect(ls).not.toContain('eslint.config.mjs');
     const { stdout: status } = await run('git', ['status', '--porcelain'], {
       cwd: root,
     });
-    expect(status).toContain('?? stencil.json'); // not ignored by the block
+    expect(status).toContain('?? loom.json'); // not ignored by the block
     const gitignore = await getRel(root, '.gitignore');
     expect(gitignore).toContain(GITIGNORE_BEGIN);
     expect(gitignore).toContain('apps/api/tsconfig.json');
     expect(result.untracked.length).toBeGreaterThan(0);
 
-    // disk state == stencil state
-    expect((await checkAll(config, root)).ok).toBe(true);
+    // disk state == loom state
+    expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
     // turbo-style regeneration from scratch works
     expect(result.sync && result.sync.created > 0).toBe(true);
   });
 
   it('partial coverage forces default: null so untouched workspaces get no file', async () => {
     const root = await makeScatteredRepo();
-    const plan = await buildPlan(root, { files: ['eslint.config.mjs'] });
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['eslint.config.mjs'],
+    });
     const spec = plan.config.files['eslint.config.mjs'];
     if (!spec) throw new Error('missing entry');
     expect(spec.rules.default).toBeNull();
@@ -146,17 +155,23 @@ describe('stencil init', () => {
     const root = await makeScatteredRepo();
     const before = await git(root, 'status', '--porcelain');
     expect(before).toBe('');
-    await initRepo(root, { dryRun: true });
+    await initRepo(root, { dryRun: true, runner: fakePnpmRunner });
     expect(await git(root, 'status', '--porcelain')).toBe('');
-    await expect(getRel(root, 'stencil.json')).rejects.toThrow();
+    await expect(getRel(root, 'loom.json')).rejects.toThrow();
   });
 
-  it('refuses to overwrite an existing stencil.json without --force', async () => {
+  it('refuses to overwrite an existing loom.json without --force', async () => {
     const root = await makeScatteredRepo();
-    await initRepo(root, { yes: true });
-    await expect(initRepo(root, { yes: true })).rejects.toThrow(/--force/);
-    const result = await initRepo(root, { yes: true, force: true });
-    expect(result.configPath).toContain('stencil.json');
+    await initRepo(root, { yes: true, runner: fakePnpmRunner });
+    await expect(
+      initRepo(root, { yes: true, runner: fakePnpmRunner }),
+    ).rejects.toThrow(/--force/);
+    const result = await initRepo(root, {
+      yes: true,
+      force: true,
+      runner: fakePnpmRunner,
+    });
+    expect(result.configPath).toContain('loom.json');
   });
 
   it('excludes unparsable files from the template but still manages the path', async () => {
@@ -165,13 +180,21 @@ describe('stencil init', () => {
     await createWorkspace(root, 'libs/broken'); // ensure package.json exists
     await putFile(root, 'libs/broken/tsconfig.json', '{ this is not json');
 
-    const plan = await buildPlan(root, { files: ['tsconfig.json'] });
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
     expect(
       plan.unmanaged.some((entry) => entry.workspace === 'libs/broken'),
     ).toBe(true);
     // the unparseable content did not inform the template, but sync still
     // takes over the managed filename (it is in the plan's default scope)
-    await initRepo(root, { yes: true, force: true, files: ['tsconfig.json'] });
+    await initRepo(root, {
+      yes: true,
+      force: true,
+      files: ['tsconfig.json'],
+      runner: fakePnpmRunner,
+    });
     expect(
       (parseJsonc(await getRel(root, 'libs/broken/tsconfig.json'), 'x') as any)
         .compilerOptions.target,
@@ -182,6 +205,6 @@ describe('stencil init', () => {
     const text = serializeConfig({
       files: { 'tsconfig.json': { rules: { default: { a: 1 } } } },
     });
-    expect(text.startsWith('// Managed by turbo-stencil')).toBe(true);
+    expect(text.startsWith('// Managed by config-loom')).toBe(true);
   });
 });

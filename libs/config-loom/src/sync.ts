@@ -1,8 +1,9 @@
 import { renderFile } from './render';
-import { discoverWorkspaces, readWorkspaceGlobs } from './workspaces';
+import type { WorkspaceRunner } from './workspaces';
+import { discoverWorkspaces } from './workspaces';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ItemStatus, StencilConfig, SyncItem, SyncResult } from './types';
+import type { ItemStatus, LoomConfig, SyncItem, SyncResult } from './types';
 
 async function readOrNull(target: string): Promise<string | null> {
   try {
@@ -18,12 +19,15 @@ async function readOrNull(target: string): Promise<string | null> {
  * cheap enough to run as a root task before every turbo command.
  */
 export async function syncAll(
-  config: StencilConfig,
+  config: LoomConfig,
   root: string,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; runner?: WorkspaceRunner } = {},
 ): Promise<SyncResult> {
-  const globs = config.workspaces ?? (await readWorkspaceGlobs(root));
-  const workspaces = await discoverWorkspaces(root, globs, config.exclude);
+  const workspaces = await discoverWorkspaces(
+    root,
+    config.exclude,
+    options.runner,
+  );
   const result: SyncResult = {
     items: [],
     created: 0,

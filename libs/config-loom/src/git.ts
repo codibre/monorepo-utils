@@ -5,8 +5,8 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
-export const GITIGNORE_BEGIN = '# BEGIN turbo-stencil generated files';
-export const GITIGNORE_END = '# END turbo-stencil generated files';
+export const GITIGNORE_BEGIN = '# BEGIN config-loom generated files';
+export const GITIGNORE_END = '# END config-loom generated files';
 
 const UNTRACK_CHUNK = 50;
 
@@ -53,7 +53,7 @@ export function buildGitignoreBlock(patterns: string[]): string {
 }
 
 /**
- * Replace (or append) the delimited turbo-stencil block in the root
+ * Replace (or append) the delimited config-loom block in the root
  * .gitignore. Idempotent: running it twice produces the same file.
  */
 export async function updateGitignoreBlock(

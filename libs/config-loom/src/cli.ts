@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 import { checkAll } from './check';
 import { loadConfig } from './config';
-import { StencilError } from './errors';
+import { LoomError } from './errors';
 import { initRepo, serializeConfig } from './init';
 import { syncAll } from './sync';
+import type { WorkspaceRunner } from './workspaces';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import type { SyncResult } from './types';
 
-const USAGE = `turbo-stencil — keep monorepo config files in sync from one template
+const USAGE = `config-loom — keep monorepo config files in sync from one template
 
 Usage:
-  turbo-stencil <command> [options]
+  config-loom <command> [options]
 
 Commands:
-  init        Reverse-engineer stencil.json from the config files scattered
+  init        Reverse-engineer loom.json from the config files scattered
               across workspaces, then delete them, gitignore them and
               regenerate them (use --dry-run to preview).
   sync        Generate every managed file (creates/updates only what changed).
@@ -25,28 +26,31 @@ Commands:
 
 Options:
   --root <dir>        Repository root (default: cwd)
-  --config <path>     stencil.json path (default: <root>/stencil.json)
+  --config <path>     loom.json path (default: <root>/loom.json)
   --files <a,b,...>   [init] only these file names (default: scan known ones)
   --dry-run           Print what would happen; change nothing
   --keep              [init] leave existing files on disk (sync overwrites)
-  --force             [init] overwrite an existing stencil.json
+  --force             [init] overwrite an existing loom.json
   --yes               Skip the confirmation prompt
   --verbose           Also list unchanged files
   -h, --help          Same as 'help'
   -v, --version       Same as 'version'
 
+Requires a pnpm workspace at the repo root: workspaces come from
+  'pnpm -r exec pwd' (other package managers may come later).
+
 Turbo wiring (install as a root devDependency, then):
-  package.json  "scripts": { "turbo-stencil": "turbo-stencil sync" }
+  package.json  "scripts": { "config-loom": "config-loom sync" }
   turbo.json    "tasks": {
-                  "//#turbo-stencil": {
-                    "inputs": ["stencil.json", "pnpm-workspace.yaml"],
+                  "//#config-loom": {
+                    "inputs": ["loom.json", "pnpm-workspace.yaml"],
                     "outputs": ["apps/*/tsconfig.json", "libs/*/tsconfig.json"]
                   },
-                  "build": { "dependsOn": ["//#turbo-stencil", "^build"] }
+                  "build": { "dependsOn": ["//#config-loom", "^build"] }
                 }
 
 Every turbo command regenerates the managed files first — from turbo's
-cache when stencil.json did not change, so the cost is zero.
+cache when loom.json did not change, so the cost is zero.
 `;
 
 interface Flags {
@@ -83,7 +87,7 @@ async function packageVersion(): Promise<string> {
   const pkg = JSON.parse(
     await readFile(path.join(__dirname, '..', 'package.json'), 'utf8'),
   ) as { name?: string; version?: string };
-  return `${pkg.name ?? 'turbo-stencil'} ${pkg.version ?? '0.0.0'}`;
+  return `${pkg.name ?? 'config-loom'} ${pkg.version ?? '0.0.0'}`;
 }
 
 function printSync(result: SyncResult, verbose: boolean): void {
@@ -102,7 +106,10 @@ function printSync(result: SyncResult, verbose: boolean): void {
   );
 }
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(
+  argv: string[],
+  deps: { runner?: WorkspaceRunner } = {},
+): Promise<number> {
   let positionals: string[];
   let flags: Flags;
   try {
@@ -125,7 +132,7 @@ export async function main(argv: string[]): Promise<number> {
     positionals = parsed.positionals;
     flags = readFlags(parsed.values);
   } catch (e) {
-    console.error(`stencil: ${(e as Error).message}`);
+    console.error(`loom: ${(e as Error).message}`);
     return 2;
   }
 
@@ -142,31 +149,37 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       case 'sync': {
         const { config } = await loadConfig(root, flags.config);
-        const result = await syncAll(config, root, { dryRun: flags.dryRun });
+        const result = await syncAll(config, root, {
+          dryRun: flags.dryRun,
+          runner: deps.runner,
+        });
         printSync(result, flags.verbose);
         return 0;
       }
       case 'check': {
         const { config } = await loadConfig(root, flags.config);
-        const { ok, drift } = await checkAll(config, root);
+        const { ok, drift } = await checkAll(config, root, {
+          runner: deps.runner,
+        });
         if (!ok) {
           console.error(
-            `stencil check failed — ${drift.length} file(s) out of sync:`,
+            `loom check failed — ${drift.length} file(s) out of sync:`,
           );
           for (const item of drift) {
             const mark = item.status === 'created' ? 'missing ' : 'outdated ';
             console.error(`  ${mark} ${item.workspace}/${item.file}`);
           }
-          console.error("run 'turbo-stencil sync' to fix");
+          console.error("run 'config-loom sync' to fix");
           return 1;
         }
         console.log(
-          'turbo-stencil check ok — every managed file matches the stencil',
+          'config-loom check ok — every managed file matches the loom',
         );
         return 0;
       }
       case 'init': {
         const result = await initRepo(root, {
+          runner: deps.runner,
           files: flags.files,
           keep: flags.keep,
           force: flags.force,
@@ -180,7 +193,7 @@ export async function main(argv: string[]): Promise<number> {
         }
         if (flags.dryRun) {
           console.log(
-            `# stencil.json that init would write to ${result.configPath}:`,
+            `# loom.json that init would write to ${result.configPath}:`,
           );
           process.stdout.write(serializeConfig(result.plan.config));
           console.log(
@@ -200,18 +213,18 @@ export async function main(argv: string[]): Promise<number> {
           printSync(result.sync, flags.verbose);
         }
         console.log(
-          'next: wire turbo-stencil — root devDependency + script "turbo-stencil": "turbo-stencil sync" + the //#turbo-stencil task in turbo.json that build/test/lint depend on (see README)',
+          'next: wire config-loom — root devDependency + script "config-loom": "config-loom sync" + the //#config-loom task in turbo.json that build/test/lint depend on (see README)',
         );
         return 0;
       }
       default:
-        console.error(`stencil: unknown command "${command}"`);
+        console.error(`loom: unknown command "${command}"`);
         console.log(USAGE);
         return 2;
     }
   } catch (e) {
-    if (e instanceof StencilError) {
-      console.error(`stencil: ${e.message}`);
+    if (e instanceof LoomError) {
+      console.error(`loom: ${e.message}`);
       return 1;
     }
     console.error(e);

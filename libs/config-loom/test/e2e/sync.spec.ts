@@ -2,11 +2,17 @@ import { checkAll } from '../../src/check';
 import { compileConfig } from '../../src/config';
 import { renderFile } from '../../src/render';
 import { syncAll } from '../../src/sync';
-import { createWorkspace, getRel, makeTempDir, putFile } from '../helpers';
+import {
+  createWorkspace,
+  fakePnpmRunner,
+  getRel,
+  makeTempDir,
+  putFile,
+} from '../helpers';
 import { parseJsonc } from '../../src/jsonc';
-import type { StencilConfigInput } from '../../src/types';
+import type { LoomConfigInput } from '../../src/types';
 
-const CONFIG: StencilConfigInput = {
+const CONFIG: LoomConfigInput = {
   files: {
     'tsconfig.json': {
       format: 'jsonc',
@@ -55,7 +61,7 @@ describe('syncAll', () => {
   it('generates every file, applying rules by declaration order', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
-    const result = await syncAll(config, root);
+    const result = await syncAll(config, root, { runner: fakePnpmRunner });
 
     expect(result.created).toBe(8); // 4 workspaces x 2 files
     expect(result.updated).toBe(0);
@@ -89,17 +95,17 @@ describe('syncAll', () => {
   it('starts jsonc files with the banner and keeps them tsc-parseable', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
-    await syncAll(config, root);
+    await syncAll(config, root, { runner: fakePnpmRunner });
     const raw = await getRel(root, 'libs/math/tsconfig.json');
-    expect(raw.split('\n')[0]).toContain('turbo-stencil');
+    expect(raw.split('\n')[0]).toContain('config-loom');
     expect(() => parseJsonc(raw, 'tsconfig.json')).not.toThrow();
   });
 
   it('is idempotent: second run changes nothing', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
-    await syncAll(config, root);
-    const second = await syncAll(config, root);
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    const second = await syncAll(config, root, { runner: fakePnpmRunner });
     expect(second.created).toBe(0);
     expect(second.updated).toBe(0);
     expect(second.unchanged).toBe(8);
@@ -108,17 +114,20 @@ describe('syncAll', () => {
   it('repairs hand edits (drift) and respects dryRun', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
-    await syncAll(config, root);
+    await syncAll(config, root, { runner: fakePnpmRunner });
     await putFile(root, 'libs/math/tsconfig.json', '{ "compilerOptions": {} }');
 
-    const dry = await syncAll(config, root, { dryRun: true });
+    const dry = await syncAll(config, root, {
+      dryRun: true,
+      runner: fakePnpmRunner,
+    });
     expect(dry.updated).toBe(1);
     expect(
       (parseJsonc(await getRel(root, 'libs/math/tsconfig.json'), 'math') as any)
         .compilerOptions.strict,
     ).toBe(undefined);
 
-    const wet = await syncAll(config, root);
+    const wet = await syncAll(config, root, { runner: fakePnpmRunner });
     expect(wet.updated).toBe(1);
     expect(
       (parseJsonc(await getRel(root, 'libs/math/tsconfig.json'), 'math') as any)
@@ -143,7 +152,7 @@ describe('syncAll', () => {
       },
       'test',
     );
-    await syncAll(config, root);
+    await syncAll(config, root, { runner: fakePnpmRunner });
     expect(await getRel(root, 'apps/core/style.txt')).toBe('core\n');
     expect(await getRel(root, 'apps/my-legacy/style.txt')).toBe('apps\n');
     expect(await getRel(root, 'libs/ui/style.txt')).toBe('base\n');
@@ -165,7 +174,7 @@ describe('syncAll', () => {
       },
       'test',
     );
-    const result = await syncAll(config, root);
+    const result = await syncAll(config, root, { runner: fakePnpmRunner });
     expect(result.created).toBe(2);
     expect(result.skipped).toBe(2);
     expect(await getRel(root, 'libs/ui/vitest.config.mts')).toContain('lib');
@@ -185,15 +194,17 @@ describe('checkAll', () => {
   it('passes right after sync and fails on stale or missing files', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
-    await syncAll(config, root);
-    expect((await checkAll(config, root)).ok).toBe(true);
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
 
     await putFile(root, 'libs/math/tsconfig.json', '{"compilerOptions":{}}');
     const { rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
     await rm(join(root, 'apps/core/eslint.config.mjs'));
 
-    const result = await checkAll(config, root);
+    const result = await checkAll(config, root, { runner: fakePnpmRunner });
     expect(result.ok).toBe(false);
     expect(result.drift.map((item) => item.status).sort()).toEqual([
       'created',

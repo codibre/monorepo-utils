@@ -1,8 +1,11 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import fg from 'fast-glob';
+import { parse as parseYaml } from 'yaml';
+import type { WorkspaceRunner } from '../src/workspaces';
 
-export async function makeTempDir(prefix = 'turbo-stencil-'): Promise<string> {
+export async function makeTempDir(prefix = 'config-loom-'): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), prefix));
 }
 
@@ -59,3 +62,22 @@ export function tsConfig(overrides: Record<string, unknown> = {}): string {
     ) + '\n'
   );
 }
+
+/**
+ * Test stand-in for `pnpm -r exec pwd`: expands the fixture's
+ * pnpm-workspace.yaml globs the way pnpm would and prints one absolute path
+ * per workspace, so e2e tests never need a real pnpm install.
+ */
+export const fakePnpmRunner: WorkspaceRunner = async (root) => {
+  const raw = await readFile(path.join(root, 'pnpm-workspace.yaml'), 'utf8');
+  const data = parseYaml(raw) as { packages?: string[] };
+  const globs = (data.packages ?? []).map((g) => {
+    const neg = g.startsWith('!');
+    return `${neg ? '!' : ''}${(neg ? g.slice(1) : g).replace(/\/+$/, '')}/package.json`;
+  });
+  const hits = await fg(globs, { cwd: root, onlyFiles: true });
+  const dirs = [...new Set(hits.map((h) => path.posix.dirname(h)))].filter(
+    (d) => d !== '' && d !== '.',
+  );
+  return dirs.map((d) => path.join(root, d) + '\n').join('');
+};

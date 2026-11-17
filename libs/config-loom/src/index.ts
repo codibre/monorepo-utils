@@ -1,5 +1,5 @@
 export * from './types';
-export { StencilError } from './errors';
+export { LoomError } from './errors';
 export {
   compileConfig,
   loadConfig,
@@ -7,7 +7,11 @@ export {
   DEFAULT_CONFIG_FILENAMES,
   FORBIDDEN_BASENAMES,
 } from './config';
-export { readWorkspaceGlobs, discoverWorkspaces } from './workspaces';
+export {
+  discoverWorkspaces,
+  pnpmWorkspaceRunner,
+  type WorkspaceRunner,
+} from './workspaces';
 export { deepMerge } from './merge';
 export { computeDelta } from './diff';
 export type { DeltaResult } from './diff';
