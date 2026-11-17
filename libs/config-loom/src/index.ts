@@ -1,4 +1,11 @@
 export * from './types';
+export {
+  deriveOutputs,
+  wireRepo,
+  ROOT_TASK,
+  type WireReport,
+  type TurboWire,
+} from './wire';
 export { LoomError } from './errors';
 export {
   compileConfig,

@@ -91,7 +91,7 @@ possible (`libs/.*-application`), or as exact `apps/bff|apps/other`
 alternations — for each exception. Use `--files tsconfig.json,eslint.config.mjs`
 to restrict the scope.
 
-### 3. Wire it up — one line
+### 3. Wire it up — one line (init does it for you)
 
 ```jsonc
 // package.json (root)
@@ -102,7 +102,16 @@ to restrict the scope.
 }
 ```
 
-That is the whole integration. `pnpm install` — fresh clone, CI runner, or a
+`init` writes exactly this. If the repo also has a **`turbo.json`**, init
+wires that too — the `//#config-loom` root task (with `outputs` derived from
+your real workspaces) plus `dependsOn: ["//#config-loom"]` on every other
+task, and the small `config-loom` script the task runs. All edits are
+surgical (jsonc-parser): comments and formatting survive, nothing that
+exists is overwritten (a custom `postinstall` earns a note to chain
+`config-loom sync` instead), and everything is idempotent — `config-loom
+wire` re-applies the wiring any time, `init --no-wire` opts out.
+
+That one script is the whole integration. `pnpm install` — fresh clone, CI runner, or a
 Tuesday afternoon pull — regenerates every managed file, and the files are on
 disk before anything else runs (TS server included). It is task-runner
 agnostic: works with npm/yarn/pnpm scripts, Turborepo, moon, or no runner at
@@ -203,6 +212,8 @@ config-loom <command> [options]
            workspaces; delete, gitignore and regenerate them.
   sync     Generate every managed file (creates/updates only what changed).
   check    Exit 1 if any managed file is missing or stale. Never writes.
+  wire     (Re)apply the integration: postinstall in the root package.json,
+           plus a //#config-loom task in turbo.json when it exists.
 
   --root <dir>       repository root (default cwd)
   --config <path>    config-loom.json path (default <root>/config-loom.json)
@@ -211,6 +222,7 @@ config-loom <command> [options]
   --keep             [init] don't delete existing files
   --force            [init] overwrite an existing config-loom.json
   --yes              skip the confirmation prompt
+  --no-wire          [init] skip the package.json/turbo.json wiring
   --verbose          also list unchanged files
 ```
 

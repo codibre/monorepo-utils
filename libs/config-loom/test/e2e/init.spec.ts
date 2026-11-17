@@ -201,6 +201,55 @@ describe('loom init', () => {
     ).toBe('es2023');
   });
 
+  it('wires postinstall and turbo.json root task when turbo.json exists', async () => {
+    const root = await makeScatteredRepo();
+    await putFile(
+      root,
+      'turbo.json',
+      JSON.stringify(
+        { tasks: { build: { dependsOn: ['^build'] }, test: {} } },
+        null,
+        2,
+      ),
+    );
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-qm', 'chore: add turbo');
+
+    const result = await initRepo(root, {
+      yes: true,
+      files: ['tsconfig.json'],
+      runner: fakePnpmRunner,
+    });
+
+    expect(result.wire?.scriptsAdded).toEqual(['postinstall', 'config-loom']);
+    expect(result.wire?.turbo?.addedTask).toBe(true);
+    expect(result.wire?.turbo?.dependsOnAdded).toEqual(['build', 'test']);
+
+    const pkg = JSON.parse(await getRel(root, 'package.json'));
+    expect(pkg.scripts.postinstall).toBe('config-loom sync');
+    const turbo = parseJsonc(
+      await getRel(root, 'turbo.json'),
+      'turbo.json',
+    ) as unknown as {
+      tasks: Record<
+        string,
+        {
+          dependsOn?: unknown[];
+          cache?: boolean;
+          outputs?: unknown[];
+        }
+      >;
+    };
+    const rootTask = turbo.tasks['//#config-loom'];
+    expect(rootTask?.cache).toBe(true);
+    expect(rootTask?.outputs).toEqual([
+      'apps/**/tsconfig.json',
+      'libs/**/tsconfig.json',
+    ]);
+    expect(turbo.tasks.build?.dependsOn).toEqual(['^build', '//#config-loom']);
+    expect(rootTask?.dependsOn).toBeUndefined();
+  });
+
   it('serializeConfig emits commented JSONC that compiles back', () => {
     const text = serializeConfig({
       files: { 'tsconfig.json': { rules: { default: { a: 1 } } } },

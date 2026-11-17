@@ -21,6 +21,7 @@ import {
 } from './util';
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces } from './workspaces';
+import { deriveOutputs, wireRepo, type WireReport } from './wire';
 import { access, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -70,6 +71,8 @@ export interface InitOptions {
   yes?: boolean;
   /** Override workspace discovery (tests); production uses pnpm. */
   runner?: WorkspaceRunner;
+  /** Skip package.json/turbo.json wiring (default: wire). */
+  noWire?: boolean;
 }
 
 export interface ClusterInfo {
@@ -87,12 +90,16 @@ export interface InitPlan {
   clusters: ClusterInfo[];
   /** Files skipped because they could not be parsed. Left untouched. */
   unmanaged: Array<{ workspace: string; file: string; reason: string }>;
+  /** Discovered workspace directories (used to derive turbo outputs). */
+  workspaces: string[];
 }
 
 export interface InitResult {
   plan: InitPlan;
   configPath: string;
   gitRepo: boolean;
+  /** Scripts/turbo.json wiring applied after sync (null with --no-wire). */
+  wire: WireReport | null;
   /** Tracked files removed from the git index during init. */
   untracked: string[];
   sync?: SyncResult;
@@ -318,7 +325,13 @@ export async function buildPlan(
     );
   }
 
-  return { config, managedFiles: managedFiles.sort(), clusters, unmanaged };
+  return {
+    config,
+    managedFiles: managedFiles.sort(),
+    clusters,
+    unmanaged,
+    workspaces,
+  };
 }
 
 export function serializeConfig(config: LoomConfigInput): string {
@@ -380,6 +393,15 @@ export async function initRepo(
       plan,
       configPath,
       gitRepo,
+      wire: opts.noWire
+        ? null
+        : await wireRepo(root, {
+            outputs: deriveOutputs(
+              plan.workspaces,
+              Object.keys(plan.config.files),
+            ),
+            dryRun: true,
+          }),
       untracked: plan.managedFiles.filter((file) => tracked.has(file)),
     };
   }
@@ -417,5 +439,10 @@ export async function initRepo(
 
   const config = compileConfig(plan.config, configPath);
   const sync = await syncAll(config, root);
-  return { plan, configPath, gitRepo, untracked, sync };
+  const wire = opts.noWire
+    ? null
+    : await wireRepo(root, {
+        outputs: deriveOutputs(plan.workspaces, Object.keys(config.files)),
+      });
+  return { plan, configPath, gitRepo, untracked, sync, wire };
 }

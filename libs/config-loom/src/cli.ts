@@ -4,7 +4,8 @@ import { loadConfig } from './config';
 import { LoomError } from './errors';
 import { initRepo, serializeConfig } from './init';
 import { syncAll } from './sync';
-import type { WorkspaceRunner } from './workspaces';
+import { deriveOutputs, wireRepo, type WireReport } from './wire';
+import { discoverWorkspaces, type WorkspaceRunner } from './workspaces';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -21,6 +22,9 @@ Commands:
               regenerate them (use --dry-run to preview).
   sync        Generate every managed file (creates/updates only what changed).
   check       Exit 1 if any managed file is missing or stale. Never writes.
+  wire        (Re)apply the integration: postinstall in the root
+              package.json, plus a //#config-loom task in turbo.json when
+              it exists. Idempotent; never overwrites existing scripts.
   version     Print the package version.
   help        This screen.
 
@@ -56,6 +60,7 @@ interface Flags {
   force: boolean;
   yes: boolean;
   verbose: boolean;
+  noWire: boolean;
 }
 
 function readFlags(
@@ -74,6 +79,7 @@ function readFlags(
     force: values.force === true,
     yes: values.yes === true,
     verbose: values.verbose === true,
+    noWire: values['no-wire'] === true,
   };
 }
 
@@ -82,6 +88,27 @@ async function packageVersion(): Promise<string> {
     await readFile(path.join(__dirname, '..', 'package.json'), 'utf8'),
   ) as { name?: string; version?: string };
   return `${pkg.name ?? 'config-loom'} ${pkg.version ?? '0.0.0'}`;
+}
+
+function printWire(report: WireReport): void {
+  if (report.scriptsAdded.length > 0) {
+    console.log(`wired package.json: ${report.scriptsAdded.join(', ')}`);
+  }
+  if (report.turbo) {
+    const parts = [];
+    if (report.turbo.addedTask) {
+      parts.push('//#config-loom task');
+    }
+    if (report.turbo.dependsOnAdded.length > 0) {
+      parts.push(`dependsOn on ${report.turbo.dependsOnAdded.join(', ')}`);
+    }
+    if (parts.length > 0) {
+      console.log(`wired ${report.turbo.file}: ${parts.join('; ')}`);
+    }
+  }
+  for (const note of report.notes) {
+    console.log(`  note: ${note}`);
+  }
 }
 
 function printSync(result: SyncResult, verbose: boolean): void {
@@ -114,6 +141,7 @@ export async function main(
         root: { type: 'string' },
         config: { type: 'string' },
         files: { type: 'string' },
+        'no-wire': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         keep: { type: 'boolean' },
         force: { type: 'boolean' },
@@ -171,9 +199,27 @@ export async function main(
         );
         return 0;
       }
+      case 'wire': {
+        const { config } = await loadConfig(root, flags.config);
+        const workspaces = await discoverWorkspaces(
+          root,
+          config.exclude,
+          deps.runner,
+        );
+        const report = await wireRepo(root, {
+          outputs: deriveOutputs(workspaces, Object.keys(config.files)),
+          dryRun: flags.dryRun,
+        });
+        printWire(report);
+        if (flags.dryRun) {
+          console.log('(dry run — nothing written)');
+        }
+        return 0;
+      }
       case 'init': {
         const result = await initRepo(root, {
           runner: deps.runner,
+          noWire: flags.noWire,
           files: flags.files,
           keep: flags.keep,
           force: flags.force,
@@ -197,6 +243,10 @@ export async function main(
             console.log(`#   ${file}`);
           }
           console.log(`# git rm --cached: ${result.untracked.length} file(s)`);
+          if (result.wire) {
+            console.log('# wiring:');
+            printWire(result.wire);
+          }
           return 0;
         }
         console.log(`wrote ${result.configPath}`);
@@ -206,8 +256,13 @@ export async function main(
         if (result.sync) {
           printSync(result.sync, flags.verbose);
         }
+        if (result.wire) {
+          printWire(result.wire);
+        }
         console.log(
-          'next: add "postinstall": "config-loom sync" to the root package.json so every install regenerates the managed files (see README)',
+          result.wire?.scriptsAdded.includes('postinstall')
+            ? 'next: files are synced now, and every pnpm install will regenerate them'
+            : 'next: add "postinstall": "config-loom sync" to the root package.json so every install regenerates the managed files (see README)',
         );
         return 0;
       }
