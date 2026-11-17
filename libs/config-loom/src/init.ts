@@ -3,7 +3,7 @@ import {
   compileConfig,
   defaultFormatFor,
 } from './config';
-import { computeDelta } from './diff';
+import { computeDelta, tsconfigEqual } from './diff';
 import { LoomError } from './errors';
 import {
   isGitRepo,
@@ -658,6 +658,15 @@ function isEmptyPatch(value: JsonValue): boolean {
   return isPlainObject(value) && Object.keys(value).length === 0;
 }
 
+/**
+ * `tsconfig.json`, `tsconfig.build.json`, `jsconfig.json` … — files whose
+ * path-like values follow TypeScript semantics, where `./dist` and `dist`
+ * (or `src` and `src` plus a recursive glob) address the same thing.
+ */
+function isTsConfigName(file: string): boolean {
+  return /^(?:ts|js)config(?:\..+)?\.json$/.test(file);
+}
+
 function uniquePattern(
   rules: Record<string, JsonValue | string | null>,
   members: string[],
@@ -850,7 +859,11 @@ export async function buildPlan(
         let value: JsonValue;
         let kind: ClusterInfo['kind'];
         if (deltaBase !== null && cluster.parsed !== null) {
-          const delta = computeDelta(deltaBase, cluster.parsed);
+          const delta = computeDelta(
+            deltaBase,
+            cluster.parsed,
+            isTsConfigName(file) ? tsconfigEqual : undefined,
+          );
           if (delta.kind !== 'delta') {
             value = structuredClone(cluster.parsed);
             kind = 'full';
