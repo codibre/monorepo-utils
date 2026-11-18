@@ -42,17 +42,20 @@ export async function syncAll(
       const content = renderFile(entry, workspace);
       const target = path.join(root, workspace, entry.file);
       if (content === null) {
-        // The workspace opted out (default: null, or a null rule matched).
+        // No entry scope covers this workspace (or its scope excluded it).
         // Remove a file WE generated earlier — never one we cannot prove
-        // we wrote. Authorship is proven by the banner prefix, or (json/
-        // jsonc only) by byte-equality with a canonical render this loom
-        // could have produced: canonical JSON is distinctive enough, plain
-        // text is not.
+        // we wrote. Authorship is proven by any scope's banner prefix, or
+        // (json/jsonc only) by byte-equality with a canonical render this
+        // loom could have produced: canonical JSON is distinctive enough,
+        // plain text is not.
         const current = await readOrNull(target);
         const provable =
           current !== null &&
-          ((entry.banner !== false && current.startsWith(entry.banner)) ||
-            (entry.format !== 'text' &&
+          (entry.scopes.some(
+            (scope) =>
+              scope.banner !== false && current.startsWith(scope.banner),
+          ) ||
+            (entry.scopes.some((scope) => scope.format !== 'text') &&
               renderCandidates(entry).includes(current)));
         if (provable) {
           if (!options.dryRun) {

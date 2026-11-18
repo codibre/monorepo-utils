@@ -219,7 +219,7 @@ describe('loom init', () => {
     ).toBe('es2023');
   });
 
-  it('stays opt-in when the missing set has no compact family cover', async () => {
+  it('scopes a sparse file with an include when the missing set has no family cover', async () => {
     const root = await makeTempDir();
     await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
     await putFile(
@@ -237,10 +237,15 @@ describe('loom init', () => {
     });
     const spec = plan.config.files['tsconfig.json'];
     if (!spec) throw new Error('missing entry');
-    // 5 scattered singletons are not a family: opt-in, not an exclude list
-    expect(spec.default).toBeNull();
+    // 5 scattered singletons are not a family: the file is scoped to its
+    // holder instead of carrying a null default.
+    expect(spec.default).toMatchObject({
+      compilerOptions: { target: 'es2023' },
+      include: ['src'],
+    });
+    expect(spec.include).toBe('apps/x1');
     expect(spec.exclude).toBeUndefined();
-    expect((spec.rules ?? []).map((rule) => rule.pattern)).toEqual(['apps/x1']);
+    expect(spec.rules ?? []).toEqual([]);
   });
 
   it('dry-run changes nothing', async () => {
@@ -363,8 +368,11 @@ describe('loom init', () => {
     };
     const entry = data.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.default).toEqual({ a: 1 });
-    expect(entry.rules).toEqual([{ pattern: 'libs/x', value: { b: 2 } }]);
+    // json values are written as JSON text block scalars — JSON as text
+    expect(entry.default).toBe('{\n  "a": 1\n}\n');
+    expect(entry.rules).toEqual([
+      { pattern: 'libs/x', value: '{\n  "b": 2\n}\n' },
+    ]);
   });
 });
 
@@ -459,9 +467,11 @@ describe('loom init YAML wire (pattern prop)', () => {
     const eslintEntry = data.files['eslint.config.mjs'];
     const tsEntry = data.files['tsconfig.json'];
     if (!eslintEntry || !tsEntry) throw new Error('missing entry');
-    // `default` is a spec property above `rules`, never a pattern.
+    // `default` is a spec property above `rules`, never a pattern; json
+    // defaults are JSON TEXT block scalars, readable as JSON.
     expect(typeof eslintEntry.default).toBe('string');
-    expect(typeof tsEntry.default).toBe('object');
+    expect(typeof tsEntry.default).toBe('string');
+    expect(String(tsEntry.default)).toContain('"compilerOptions"');
     expect(
       (tsEntry.rules ?? []).some((rule) => rule.pattern === 'default'),
     ).toBe(false);
@@ -501,6 +511,8 @@ describe('loom init YAML wire (pattern prop)', () => {
         'tsconfig.json': {
           format: 'jsonc',
           arrays: 'replace',
+          include: 'libs/.*',
+          exclude: 'libs/generated/.*',
           default: { compilerOptions: { strict: true } },
           rules: [
             {
@@ -513,21 +525,37 @@ describe('loom init YAML wire (pattern prop)', () => {
           format: 'text',
           arrays: 'replace',
           default: "import a from 'a';\nexport default a;\n",
-          rules: [{ pattern: 'apps/x', value: null }],
+          rules: [
+            {
+              pattern: 'apps/x',
+              value: "import x from 'x';\nexport default x;\n",
+            },
+          ],
         },
       },
     };
-    await putFile(root, 'config-loom.yaml', serializeConfig(config));
+    const yaml = serializeConfig(config);
+    await putFile(root, 'config-loom.yaml', yaml);
+    // json values are written as JSON text block scalars, not YAML props
+    expect(yaml).toMatch(/default: \|\n\s+\{\n\s+"compilerOptions"/);
     const { config: loaded } = await loadConfig(root);
     const ts = loaded.files['tsconfig.json'];
     const es = loaded.files['eslint.config.mjs'];
     if (!ts || !es) throw new Error('missing entry');
-    expect(ts.defaultValue).toEqual({ compilerOptions: { strict: true } });
-    expect(ts.rules[0]).toMatchObject({
+    expect(ts.scopes[0]?.defaultValue).toEqual({
+      compilerOptions: { strict: true },
+    });
+    expect(ts.scopes[0]?.rules[0]).toMatchObject({
       pattern: 'libs/.*',
       value: { compilerOptions: { composite: null } },
     });
-    expect(es.defaultValue).toBe("import a from 'a';\nexport default a;\n");
-    expect(es.rules[0]?.value).toBeNull();
+    expect(ts.scopes[0]?.include).toHaveLength(1);
+    expect(ts.scopes[0]?.exclude).toHaveLength(1);
+    expect(es.scopes[0]?.defaultValue).toBe(
+      "import a from 'a';\nexport default a;\n",
+    );
+    expect(es.scopes[0]?.rules[0]?.value).toBe(
+      "import x from 'x';\nexport default x;\n",
+    );
   });
 });

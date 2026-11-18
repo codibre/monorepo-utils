@@ -169,20 +169,15 @@ describe('syncAll', () => {
     expect(await getRel(root, 'libs/ui/style.txt')).toBe('base\n');
   });
 
-  it('default: null generates only for matched workspaces', async () => {
+  it('include generates only for matched workspaces', async () => {
     const root = await makeRepo();
     const config = compileConfig(
       {
         files: {
           'vitest.config.mts': {
             format: 'text',
-            default: null,
-            rules: [
-              {
-                pattern: 'libs/.*',
-                value: "export default { test: { name: 'lib' } };\n",
-              },
-            ],
+            include: 'libs/.*',
+            default: "export default { test: { name: 'lib' } };\n",
           },
         },
       },
@@ -203,7 +198,7 @@ describe('syncAll', () => {
     expect(renderFile(entry, 'apps/other-legacy')).toContain('es2020');
   });
 
-  it('a null rule opts workspaces out and removes the generated file', async () => {
+  it('an exclude removes a workspace and deletes its generated file', async () => {
     const root = await makeRepo();
     const config = compileConfig(CONFIG, 'test');
     await syncAll(config, root, { runner: fakePnpmRunner });
@@ -213,11 +208,9 @@ describe('syncAll', () => {
         files: {
           'tsconfig.json': {
             format: 'jsonc',
+            exclude: 'libs/math',
             default: CONFIG.files['tsconfig.json']!.default,
-            rules: [
-              ...(CONFIG.files['tsconfig.json']!.rules ?? []),
-              { pattern: 'libs/math', value: null },
-            ],
+            rules: [...(CONFIG.files['tsconfig.json']!.rules ?? [])],
           },
         },
       },
@@ -243,25 +236,31 @@ describe('syncAll', () => {
     );
   });
 
-  it('a later non-null rule revives a workspace after a broad opt-out', async () => {
+  it('entry scopes cascade — but the claiming scope excludes decisively', async () => {
     const root = await makeRepo();
     const config = compileConfig(
       {
         files: {
-          'tsconfig.json': {
+          'tsconfig-libs': {
+            filename: 'tsconfig.json',
             format: 'jsonc',
+            include: 'libs/.*',
+            exclude: 'libs/math',
             default: { a: 1 },
-            rules: [
-              { pattern: 'libs/.*', value: null },
-
-              { pattern: 'libs/ui', value: { b: 2 } },
-            ],
+            rules: [{ pattern: 'libs/ui', value: { b: 2 } }],
+          },
+          'tsconfig-rest': {
+            filename: 'tsconfig.json',
+            format: 'jsonc',
+            default: { c: 3 },
           },
         },
       },
       'test',
     );
     await syncAll(config, root, { runner: fakePnpmRunner });
+    // libs/math is claimed by the first scope, then its exclude strikes —
+    // decisive: the later catch-all entry does NOT revive it.
     await expect(getRel(root, 'libs/math/tsconfig.json')).rejects.toThrow();
     const ui = parseJsonc(
       await getRel(root, 'libs/ui/tsconfig.json'),
@@ -269,6 +268,12 @@ describe('syncAll', () => {
     ) as any;
     expect(ui.a).toBe(1);
     expect(ui.b).toBe(2);
+    // workspaces no earlier scope claims fall through to the next entry.
+    const core = parseJsonc(
+      await getRel(root, 'apps/core/tsconfig.json'),
+      'core',
+    ) as any;
+    expect(core).toEqual({ c: 3 });
   });
 
   it('never deletes a file it cannot prove it generated', async () => {
@@ -288,8 +293,8 @@ describe('syncAll', () => {
         files: {
           'style.txt': {
             format: 'text',
+            exclude: 'libs/ui',
             default: 'base\n',
-            rules: [{ pattern: 'libs/ui', value: null }],
           },
         },
       },

@@ -1,92 +1,97 @@
 import { deepMerge } from './merge';
-import type { CompiledFileEntry, JsonValue } from './types';
+import type { CompiledFileEntry, CompiledScope, JsonValue } from './types';
+
+/**
+ * The entry scope that generates `file` for this workspace: the first scope
+ * whose `include` matches (or has no include) and whose `exclude` does not.
+ * A scope's exclude is decisive — once a scope claims a workspace, its
+ * exclude removes the file outright, even if a later entry would match.
+ */
+export function scopeFor(
+  entry: CompiledFileEntry,
+  workspace: string,
+): CompiledScope | null {
+  for (const scope of entry.scopes) {
+    if (
+      scope.include.length === 0 ||
+      scope.include.some((re) => re.test(workspace))
+    ) {
+      if (scope.exclude.some((re) => re.test(workspace))) {
+        return null;
+      }
+      return scope;
+    }
+  }
+  return null;
+}
 
 /**
  * Produce the content of `entry` for one workspace directory, or null when
- * the workspace opts out: either `default: null` with no matching rule, or a
- * matching rule whose value is `null` (opt-out rule).
+ * no entry scope covers it (the workspace does not get the file).
  *
- * JSON/JSONC: start from `default` and deep-merge every matching rule in
- * declaration order (deterministic: later rules win on conflicts; a `null`
- * rule suppresses the file, a later non-null rule revives it — but a
- * workspace matching the per-file `exclude` list never gets the file).
- * Text: the last matching rule replaces the content entirely.
+ * JSON/JSONC: start from the scope's `default` and deep-merge every
+ * matching rule in declaration order (deterministic: later rules win on
+ * conflicts). Text: the last matching rule replaces the content entirely.
  */
 export function renderFile(
   entry: CompiledFileEntry,
   workspace: string,
 ): string | null {
-  if (entry.exclude.some((pattern) => pattern.test(workspace))) {
-    // Hard per-file opt-out: no file, no matter what default/rules say.
+  const scope = scopeFor(entry, workspace);
+  if (scope === null) {
     return null;
   }
-  const matches = entry.rules.filter((rule) => rule.regex.test(workspace));
-  if (
-    matches.length === 0 &&
-    (!entry.hasDefault || entry.defaultValue === null)
-  ) {
-    // No default (or `default: null` opt-in mode) and nothing matched.
-    return null;
-  }
+  const matches = scope.rules.filter((rule) => rule.regex.test(workspace));
 
-  if (entry.format === 'text') {
-    let content =
-      typeof entry.defaultValue === 'string' ? entry.defaultValue : null;
+  if (scope.format === 'text') {
+    let content: string | null =
+      typeof scope.defaultValue === 'string' ? scope.defaultValue : null;
     for (const match of matches) {
-      content = match.value === null ? null : (match.value as string);
+      content = match.value as string;
     }
     if (content === null) {
       return null;
     }
-    return entry.banner ? `${entry.banner}\n${content}` : content;
+    return scope.banner ? `${scope.banner}\n${content}` : content;
   }
 
-  let merged: JsonValue =
-    entry.hasDefault && entry.defaultValue !== null ? entry.defaultValue : {};
-  let suppressed = false;
+  let merged: JsonValue = scope.defaultValue;
   for (const match of matches) {
-    if (match.value === null) {
-      suppressed = true;
-      continue;
-    }
-    suppressed = false;
-    merged = deepMerge(merged, match.value, entry.arrays);
-  }
-  if (suppressed) {
-    return null;
+    merged = deepMerge(merged, match.value, scope.arrays);
   }
   const body = `${JSON.stringify(merged, null, 2)}\n`;
-  return entry.banner ? `${entry.banner}\n${body}` : body;
+  return scope.banner ? `${scope.banner}\n${body}` : body;
 }
 
 /**
- * The exact byte sequences a sync could have written for this entry when no
- * opt-out applied: the `default` render plus one render per rule as if it
- * alone had matched (banner included). Sync uses this to prove authorship
- * of a file it must delete after an opt-out, where no banner is present.
+ * The exact byte sequences a sync could have written for this file when no
+ * scope opted out: every scope's `default` render plus one render per rule
+ * as if it alone had matched (banner included). Sync uses this to prove
+ * authorship of a file it must delete after a scope change, where no banner
+ * is present.
  */
 export function renderCandidates(entry: CompiledFileEntry): string[] {
-  if (entry.format === 'text') {
-    const wrap = (c: string) => (entry.banner ? `${entry.banner}\n${c}` : c);
-    const out: string[] = [];
-    if (typeof entry.defaultValue === 'string') {
-      out.push(wrap(entry.defaultValue));
+  const out: string[] = [];
+  for (const scope of entry.scopes) {
+    if (scope.format === 'text') {
+      const wrap = (c: string) => (scope.banner ? `${scope.banner}\n${c}` : c);
+      if (typeof scope.defaultValue === 'string') {
+        out.push(wrap(scope.defaultValue));
+      }
+      for (const rule of scope.rules) {
+        if (typeof rule.value === 'string') out.push(wrap(rule.value));
+      }
+      continue;
     }
-    for (const rule of entry.rules) {
-      if (typeof rule.value === 'string') out.push(wrap(rule.value));
+    const wrap = (v: JsonValue) => {
+      const body = `${JSON.stringify(v, null, 2)}\n`;
+      return scope.banner ? `${scope.banner}\n${body}` : body;
+    };
+    const base = scope.defaultValue;
+    out.push(wrap(base));
+    for (const rule of scope.rules) {
+      out.push(wrap(deepMerge(base, rule.value, scope.arrays)));
     }
-    return out;
-  }
-  const wrap = (v: JsonValue) => {
-    const body = `${JSON.stringify(v, null, 2)}\n`;
-    return entry.banner ? `${entry.banner}\n${body}` : body;
-  };
-  const base: JsonValue =
-    entry.hasDefault && entry.defaultValue !== null ? entry.defaultValue : {};
-  const out: string[] = [wrap(base)];
-  for (const rule of entry.rules) {
-    if (rule.value === null) continue;
-    out.push(wrap(deepMerge(base, rule.value, entry.arrays)));
   }
   return out;
 }

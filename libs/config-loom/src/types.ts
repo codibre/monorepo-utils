@@ -33,58 +33,77 @@ export type ArrayPolicy = 'replace' | 'concat' | 'unique';
  * against the workspace directory path relative to the repo root, e.g.
  * `libs/.*-application`. It matches directories literally, so a pattern of
  * `default` matches a workspace folder named `default` — the base content
- * is the sibling `default` property of the file spec, never a pattern.
- * A `value` of `null` (or absent) opts the matched workspaces out of the
- * file (only meaningful when a `default` exists). Instead of an inline
- * `value`, a rule may carry `template`: a repo-relative path whose file
- * content becomes the value (handy when the content is a big script).
+ * is the sibling `default` property of the file entry, never a pattern.
+ * Values must have content: opting workspaces out of the file is the job
+ * of `include`/`exclude`, not of null values. Instead of an inline `value`,
+ * a rule may carry `template`: a repo-relative path whose file content
+ * becomes the value (handy when the content is big).
+ *
+ * For `json`/`jsonc` a value may be written as a string containing JSONC
+ * text (a YAML block scalar) — parsed at load time, keeping JSON readable
+ * as JSON inside the config.
  */
 export interface RuleInput {
   pattern: string;
-  value?: JsonValue | string | null;
+  value?: JsonValue | string;
   /** Repo-relative template file; mutually exclusive with `value`. */
-  template?: string | null;
+  template?: string;
 }
 
 /**
- * One generated file, as written in config-loom.yaml before compilation.
+ * One file entry as written in config-loom.yaml before compilation. The
+ * `files` map key names the entry; several entries may share a `filename`
+ * to write the same file to different workspace subsets — for a given
+ * workspace the FIRST entry whose `include` matches and whose `exclude`
+ * does not is the one that renders.
  */
 export interface FileSpecInput {
+  /**
+   * Workspace-relative file this entry generates. Defaults to the entry's
+   * key in `files:`. Multiple entries may target the same filename.
+   */
+  filename?: string;
+  /**
+   * Regular expression(s) (full match against the workspace directory)
+   * restricting which workspaces this entry generates. Omitted means all
+   * workspaces (minus `exclude`).
+   */
+  include?: string | string[];
+  /**
+   * Regular expression(s), same syntax as `include`, that must NEVER
+   * receive this file from this entry: a hard opt-out beating `default`
+   * and every rule. Prefer families (`packages/mq-.*`, `.*-rs`) over name
+   * lists, so new projects joining the family stay excluded without
+   * editing anything.
+   */
+  exclude?: string | string[];
   format?: FileFormat;
   arrays?: ArrayPolicy;
   banner?: string | boolean;
   /**
-   * Base content every matching workspace starts from. `null` (or absent)
-   * makes the entry opt-in: only workspaces hit by a non-null rule get the
-   * file. Instead of an inline value, a spec may carry `template`: a
+   * Base content every workspace matched by this entry starts from. It
+   * must have a value (there is no opt-in null mode — use `include` to
+   * restrict scope). For `json`/`jsonc` it may be written as a string
+   * containing the JSONC text (a block scalar) — parsed at load time.
+   * Instead of an inline value, an entry may carry `template`: a
    * repo-relative path whose file content becomes the default (mutually
    * exclusive with `default`).
    */
-  default?: JsonValue | string | null;
+  default?: JsonValue | string;
   /** Repo-relative template file for `default`; resolved by loadConfig. */
-  template?: string | null;
+  template?: string;
   /**
    * Ordered list of `{ pattern, value }` rules, merged over `default` and
-   * each other — later rules win (specific props beat `default`). A rule
-   * value of `null` opts its matches out of the file.
+   * each other — later rules win (specific props beat `default`).
    */
   rules?: RuleInput[];
-  /**
-   * Regular expressions (same syntax as rule keys, full match against the
-   * workspace directory) for workspaces that must NEVER receive this file.
-   * A hard opt-out: it beats `default` and every rule, at any position.
-   * Prefer directory/naming families (`packages/mq-.*`,
-   * `packages/.*-medicine-quotation-sdk`) over name lists, so new projects
-   * joining the family stay excluded without editing anything.
-   */
-  exclude?: string[];
 }
 
 /**
  * config-loom.yaml as read from disk (comments allowed).
  */
 export interface LoomConfigInput {
-  /** Globs of workspace directories to skip entirely. */
+  /** Regular expressions for workspace directories to skip entirely. */
   exclude?: string[];
   files: Record<string, FileSpecInput>;
 }
@@ -92,27 +111,37 @@ export interface LoomConfigInput {
 export interface CompiledRule {
   pattern: string;
   regex: RegExp;
-  /** `null` marks an opt-out rule: matched workspaces get no file. */
-  value: JsonValue | string | null;
+  /** Always has content: null values are a validation error. */
+  value: JsonValue | string;
+}
+
+/**
+ * One compiled `files:` entry: the workspace subset it serves (include
+ * minus exclude) plus the generation content for that subset.
+ */
+export interface CompiledScope {
+  /** Empty means "every workspace". Exclude beats include. */
+  include: RegExp[];
+  exclude: RegExp[];
+  format: FileFormat;
+  arrays: ArrayPolicy;
+  banner: string | false;
+  /** Always has content (no opt-in null mode). */
+  defaultValue: JsonValue | string;
+  /** Rules, in declaration order. */
+  rules: CompiledRule[];
 }
 
 export interface CompiledFileEntry {
   /** Path relative to each workspace root, e.g. `tsconfig.json`. */
   file: string;
-  format: FileFormat;
-  arrays: ArrayPolicy;
-  banner: string | false;
-  hasDefault: boolean;
-  /** null when `default` is explicitly null (opt-in mode: only matches get a file). */
-  defaultValue: JsonValue | string | null;
-  /** Non-default rules, in declaration order. */
-  rules: CompiledRule[];
-  /** Compiled per-file `exclude` patterns: hard opt-out, beats everything. */
-  exclude: RegExp[];
+  /** Entries sharing this filename, declaration order: first match renders. */
+  scopes: CompiledScope[];
 }
 
 export interface LoomConfig {
   exclude: string[];
+  /** Keyed by target filename (not by entry name). */
   files: Record<string, CompiledFileEntry>;
 }
 
@@ -132,6 +161,6 @@ export interface SyncResult {
   updated: number;
   unchanged: number;
   skipped: number;
-  /** Generated files removed because a later opt-out (`null`) rule matched. */
+  /** Generated files removed because the workspace left every scope. */
   deleted: number;
 }
