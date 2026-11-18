@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.9.1...config-loom%400.10.0) (2026-11-18)
+
+### Features
+
+* **config-loom:** name rule templates after their pattern when simple ([31ff552](https://github.com/codibre/monorepo-utils/commit/31ff5527545330a236159a36705b7f61891104c5))
+
 ## [0.9.1](https://github.com/codibre/monorepo-utils/compare/config-loom%400.8.0...config-loom%400.9.1) (2026-11-18)
 
 ### Features
