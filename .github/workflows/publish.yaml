@@ -5,13 +5,48 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Only the most recently merged change should publish (issue #17).
+# Runs are SERIALIZED — cancel-in-progress stays false so a run that already
+# started npm publishing is never killed mid-flight — and every older run
+# skips itself in `decide` before doing any work once a newer commit lands
+# on main. The newest run builds main's tip, so one release covers all the
+# merged PRs with a single changelog.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
   id-token: write
 
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      superseded: ${{ steps.check.outputs.superseded }}
+    steps:
+      - name: Check whether a newer commit landed on the branch
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ '${{ github.event_name }}' != 'push' ]; then
+            echo 'Manual run — publishing whatever commit was dispatched.'
+            echo 'superseded=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LATEST=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}" --jq .sha)
+          if [ -n "$LATEST" ] && [ "$LATEST" != '${{ github.sha }}' ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Superseded by ${LATEST:0:7} — the newest run publishes all merged changes in one release."
+          else
+            echo 'superseded=false' >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: decide
+    if: needs.decide.outputs.superseded == 'false'
     runs-on: ubuntu-latest
 
     steps:
