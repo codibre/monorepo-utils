@@ -1,4 +1,6 @@
-import { renderCandidates, renderFile } from './render';
+import { renderCandidates, renderFile, scopeFor } from './render';
+import { tsEquivalent } from './tsformat';
+import { isJsonFormat } from './util';
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces } from './workspaces';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
@@ -47,7 +49,7 @@ export async function syncAll(
         // we wrote. Authorship is proven by any scope's banner prefix, or
         // (json/jsonc only) by byte-equality with a canonical render this
         // loom could have produced: canonical JSON is distinctive enough,
-        // plain text is not.
+        // plain text and TypeScript source are not.
         const current = await readOrNull(target);
         const provable =
           current !== null &&
@@ -55,7 +57,7 @@ export async function syncAll(
             (scope) =>
               scope.banner !== false && current.startsWith(scope.banner),
           ) ||
-            (entry.scopes.some((scope) => scope.format !== 'text') &&
+            (entry.scopes.some((scope) => isJsonFormat(scope.format)) &&
               renderCandidates(entry).includes(current)));
         if (provable) {
           if (!options.dryRun) {
@@ -78,6 +80,15 @@ export async function syncAll(
       if (current === null) {
         status = 'created';
       } else if (current === content) {
+        status = 'unchanged';
+      } else if (
+        scopeFor(entry, workspace)?.format === 'ts' &&
+        tsEquivalent(current, content, entry.file)
+      ) {
+        // A ts file is up to date when it is the same CODE — a prettier
+        // pass or hand reformat must not count as drift, and rewriting it
+        // would only start a formatting tug-of-war with the repo's own
+        // formatter.
         status = 'unchanged';
       } else {
         status = 'updated';
