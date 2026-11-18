@@ -15,8 +15,10 @@ export interface DeltaResult {
  * Comparison used to decide a subtree is unchanged. Defaults to strict
  * `deepEqual`; callers may pass a semantic comparator so equivalent values
  * (e.g. `./dist` and `dist` in a tsconfig) collapse into the default.
+ * `key` names the property the two values sit under in their parent object
+ * (`undefined` for the root), so comparators can be context-aware.
  */
-export type Equal = (a: JsonValue, b: JsonValue) => boolean;
+export type Equal = (a: JsonValue, b: JsonValue, key?: string) => boolean;
 
 function isEmptyPatch(value: JsonValue): boolean {
   return (
@@ -27,8 +29,13 @@ function isEmptyPatch(value: JsonValue): boolean {
   );
 }
 
-function deltaOf(base: JsonValue, target: JsonValue, same: Equal): DeltaResult {
-  if (same(base, target)) {
+function deltaOf(
+  base: JsonValue,
+  target: JsonValue,
+  same: Equal,
+  parentKey: string | undefined,
+): DeltaResult {
+  if (same(base, target, parentKey)) {
     return { kind: 'delta', value: {} };
   }
   const baseIsObject =
@@ -49,6 +56,7 @@ function deltaOf(base: JsonValue, target: JsonValue, same: Equal): DeltaResult {
         baseObj[key] as JsonValue,
         targetObj[key] as JsonValue,
         same,
+        key,
       );
       if (inner.kind === 'full') {
         return { kind: 'full', value: target };
@@ -79,7 +87,7 @@ export function computeDelta(
   target: JsonValue,
   same: Equal = deepEqual,
 ): DeltaResult {
-  return deltaOf(base, target, same);
+  return deltaOf(base, target, same, undefined);
 }
 
 /**
@@ -99,17 +107,32 @@ function normalizePathish(value: string): string {
   return out;
 }
 
-function normalizeTsPaths(value: JsonValue): JsonValue {
+/**
+ * Path-array keys TypeScript resolves as **sets**: the glob inventory matters,
+ * the declaration order does not — `['src', 'test']` and `['test', 'src']`
+ * compile the exact same file set.
+ */
+const PATH_SET_KEYS = new Set(['include', 'exclude', 'files']);
+
+function normalizeTsPaths(value: JsonValue, key?: string): JsonValue {
   if (typeof value === 'string') {
     return normalizePathish(value);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => normalizeTsPaths(item));
+    const items = value.map((item) => normalizeTsPaths(item));
+    if (key !== undefined && PATH_SET_KEYS.has(key)) {
+      const paths = items.filter((i): i is string => typeof i === 'string');
+      if (paths.length === items.length) {
+        // order- and duplicate-insensitive multiset comparison
+        return [...new Set(paths)].sort();
+      }
+    }
+    return items;
   }
   if (typeof value === 'object' && value !== null) {
     const out: Record<string, JsonValue> = {};
-    for (const [key, inner] of Object.entries(value)) {
-      out[key] = normalizeTsPaths(inner);
+    for (const [k, inner] of Object.entries(value)) {
+      out[k] = normalizeTsPaths(inner, k);
     }
     return out;
   }
@@ -120,8 +143,15 @@ function normalizeTsPaths(value: JsonValue): JsonValue {
  * Semantic equality for tsconfig/jsconfig values: strings that only differ by
  * a leading `./` or a trailing recursive glob describe the same path, so a
  * rule repeating `dist` where the default says `./dist` carries no
- * information.
+ * information; and `include`/`exclude`/`files` arrays are sets — same blobs in
+ * a different order (or with a duplicate entry) is the same file inventory.
+ * The set reading applies only to arrays of strings; anything else keeps
+ * order-sensitive comparison.
  */
-export function tsconfigEqual(a: JsonValue, b: JsonValue): boolean {
-  return deepEqual(normalizeTsPaths(a), normalizeTsPaths(b));
+export function tsconfigEqual(
+  a: JsonValue,
+  b: JsonValue,
+  key?: string,
+): boolean {
+  return deepEqual(normalizeTsPaths(a, key), normalizeTsPaths(b, key));
 }

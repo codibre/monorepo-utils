@@ -77,6 +77,31 @@ describe('tsconfigEqual (issue #5)', () => {
     expect(tsconfigEqual(['./src/**/*'], ['src'])).toBe(true);
   });
 
+  it('treats include/exclude/files as sets, not ordered lists', () => {
+    expect(tsconfigEqual(['src', 'test'], ['test', 'src'], 'include')).toBe(
+      true,
+    );
+    expect(
+      tsconfigEqual(
+        { include: ['src', 'test'], exclude: ['a', 'b'] },
+        { include: ['test', 'src'], exclude: ['b', 'a'] },
+      ),
+    ).toBe(true);
+    // equivalent spellings AND order at the same time
+    expect(
+      tsconfigEqual(['src/**/*', 'test'], ['test', './src'], 'include'),
+    ).toBe(true);
+    // a duplicated path is the same inventory
+    expect(tsconfigEqual(['src', 'src'], ['src'], 'exclude')).toBe(true);
+    // without path-set context order still matters
+    expect(tsconfigEqual(['src', 'test'], ['test', 'src'])).toBe(false);
+    expect(tsconfigEqual([1, 2], [2, 1], 'include')).toBe(false);
+    // and a genuinely different inventory stays different
+    expect(
+      tsconfigEqual({ include: ['src'] }, { include: ['src', 'test'] }),
+    ).toBe(false);
+  });
+
   it('keeps genuinely different values apart', () => {
     expect(tsconfigEqual('dist', 'dist/src')).toBe(false);
     expect(tsconfigEqual(['src'], ['test'])).toBe(false);
@@ -103,6 +128,15 @@ describe('computeDelta with the tsconfig comparator (issue #5)', () => {
     expect(computeDelta(base, target, tsconfigEqual)).toEqual({
       kind: 'delta',
       value: { exclude: null },
+    });
+  });
+
+  it('folds a permutation of the include list into the default', () => {
+    const base = { include: ['src', 'test'], exclude: ['node_modules'] };
+    const target = { include: ['test', 'src'], exclude: ['node_modules'] };
+    expect(computeDelta(base, target, tsconfigEqual)).toEqual({
+      kind: 'delta',
+      value: {},
     });
   });
 
