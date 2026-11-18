@@ -51,6 +51,10 @@ pnpm exec config-loom sync           # (re)generate everything
 pnpm exec config-loom check          # CI gate: fail if anything drifted
 ```
 
+> Before the first `init`, give the repo the shape `init` rewards: package
+> configs that **inherit** a root base instead of copying one — see
+> [Before `init`: give your configs a base](#before-init-give-your-configs-a-base).
+
 ## Why not X?
 
 | Tool                                                                                                  | What it does                       | Why we built this instead                                                                               |
@@ -170,6 +174,73 @@ caught between commands rather than only at install time:
 Declare **every** generated file in `outputs`: on a cache hit turbo restores
 exactly those paths. With the postinstall wiring you don't need this to make
 gitignored files reappear — install already does.
+
+## Before `init`: give your configs a base
+
+config-loom is built for monorepos where subprojects **inherit** a base
+config. The shape of your repo _before_ `init` decides the quality of the
+loom you get: `init` clusters files by exact content, so thin inherited
+configs collapse into one clean default plus small rules, while thick
+standalone configs produce many rules full of copy-paste noise (paths,
+package names, flags that drifted apart by accident).
+
+Recommended shape — one base per config family at the **repo root**, each
+package config referencing it and adding only genuine overrides:
+
+```
+repo/
+├── tsconfig.base.json      ← shared compilerOptions (stays manual)
+├── vitest.base.ts          ← shared test setup      (stays manual)
+└── packages/
+    ├── api/tsconfig.json   ← extends the base + { "outDir": "dist" }
+    └── web/tsconfig.json   ← identical → clusters into one default, zero rules
+```
+
+```jsonc
+// packages/api/tsconfig.json — thin by design
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist", // the ONLY thing that differs
+  },
+}
+```
+
+```ts
+// packages/api/vitest.config.ts — compose, don't copy
+import { mergeConfig } from 'vitest/config';
+import base from '../../vitest.base';
+
+export default mergeConfig(base, {
+  test: { include: ['src/**/*.spec.ts'] },
+});
+```
+
+Why it pays off:
+
+- **`init` gets clean.** Every package whose config is just `extends` is
+  byte-identical: one cluster, zero rules. Only true differences become
+  one-key rules — diffs a human can approve at a glance.
+- **Rules stay honest.** With thick standalone files, `init` invents rules
+  to reconcile coincidental differences and misses real ones buried in the
+  bulk. With inheritance, a rule means "this workspace really is
+  different".
+- **The root base is not loom-managed** — workspaces are packages, the repo
+  root is not one. It stays the manual source of truth; loom polices the
+  thin leaf files.
+
+Prefer loom itself as the inheritance engine instead? Skip the native
+chain: put the base in the entry as `default:` — or as
+`template: ./tsconfig.base.json`, reusing the root file — and let rules
+carry the per-workspace overrides. Loom then writes each file **fully
+materialized**; remove any `extends`/import from those files, because sync
+overwrites them whole. Pick one style per file entry — inherited thin
+files, or flattened generation — never both in the same file.
+
+Finally, `exclude` anything that is not a real consumer (`fixture*`,
+`example*`, playgrounds): config-loom never writes into a workspace that
+lacks the `scripts.build` / `main` / `module` marker, and a stray
+half-config in a fixture fragments your clusters for no reason.
 
 ## `config-loom.yaml` reference
 
