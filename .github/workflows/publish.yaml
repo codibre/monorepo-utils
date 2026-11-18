@@ -97,7 +97,7 @@ jobs:
         id: oidc
         run: |
           OIDC_TOKEN=$(curl -sSL --fail-with-body "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://registry.npmjs.org" \
-            -H "Authorization: Bearer ${ACTI...KEN}" | jq -r '.value')
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | jq -r '.value')
           if [ -z "$OIDC_TOKEN" ] || [ "$OIDC_TOKEN" = 'null' ]; then
             echo '::error::Could not mint an OIDC token for npm provenance (see curl output above). Check Actions general permissions: "Can GitHub Actions mint an id-token".'
             exit 1
