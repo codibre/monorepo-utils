@@ -1,4 +1,5 @@
 import { deepMerge } from './merge';
+import { isTextLike } from './util';
 import type { CompiledFileEntry, CompiledScope, JsonValue } from './types';
 
 /**
@@ -31,7 +32,8 @@ export function scopeFor(
  *
  * JSON/JSONC: start from the scope's `default` and deep-merge every
  * matching rule in declaration order (deterministic: later rules win on
- * conflicts). Text: the last matching rule replaces the content entirely.
+ * conflicts). Text/TS: the last matching rule replaces the content
+ * entirely.
  */
 export function renderFile(
   entry: CompiledFileEntry,
@@ -43,7 +45,7 @@ export function renderFile(
   }
   const matches = scope.rules.filter((rule) => rule.regex.test(workspace));
 
-  if (scope.format === 'text') {
+  if (isTextLike(scope.format)) {
     let content: string | null =
       typeof scope.defaultValue === 'string' ? scope.defaultValue : null;
     for (const match of matches) {
@@ -73,7 +75,7 @@ export function renderFile(
 export function renderCandidates(entry: CompiledFileEntry): string[] {
   const out: string[] = [];
   for (const scope of entry.scopes) {
-    if (scope.format === 'text') {
+    if (isTextLike(scope.format)) {
       const wrap = (c: string) => (scope.banner ? `${scope.banner}\n${c}` : c);
       if (typeof scope.defaultValue === 'string') {
         out.push(wrap(scope.defaultValue));

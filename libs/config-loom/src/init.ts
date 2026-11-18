@@ -15,10 +15,12 @@ import {
 import { synthesizeIgnoreList } from './ignore';
 import { parseJsonc } from './jsonc';
 import { syncAll } from './sync';
+import { tsSignature } from './tsformat';
 import {
   canonicalJson,
   escapeRegExp,
   isPlainObject,
+  isTextLike,
   normalizeText,
 } from './util';
 import type { WorkspaceRunner } from './workspaces';
@@ -43,13 +45,17 @@ export const KNOWN_CONFIG_FILES = [
   'tsconfig.json',
   'tsconfig.build.json',
   'eslint.config.mjs',
+  'eslint.config.cjs',
   'eslint.config.js',
   '.eslintrc.json',
   '.eslintrc.js',
   'vitest.config.mts',
+  'vitest.config.mjs',
   'vitest.config.ts',
   'vitest.config.js',
   'jest.config.js',
+  'jest.config.cjs',
+  'jest.config.mjs',
   'jest.config.ts',
   'nest-cli.json',
 ];
@@ -69,6 +75,12 @@ const MAX_EXCLUSION_EXCEPTIONS = 12;
 
 interface Cluster {
   normalized: string;
+  /**
+   * Representative source: the first member's raw content normalized as
+   * text. Used as the emitted value for text-like formats — for `ts` the
+   * `normalized` key is a token signature, not content.
+   */
+  text: string;
   members: string[];
   parsed: JsonValue | null;
 }
@@ -764,8 +776,8 @@ function clusterValue(
   cluster: Cluster,
   format: FileFormat,
 ): JsonValue | string {
-  if (format === 'text') {
-    return cluster.normalized;
+  if (isTextLike(format)) {
+    return cluster.text;
   }
   return structuredClone(cluster.parsed);
 }
@@ -811,6 +823,16 @@ export async function buildPlan(
       let parsed: JsonValue | null = null;
       if (format === 'text') {
         normalized = normalizeText(raw);
+      } else if (format === 'ts') {
+        // Cluster TypeScript sources by their token signature: files that
+        // only differ by formatting (spacing, comments, quotes, trailing
+        // commas) share one cluster and fold into the default.
+        try {
+          normalized = tsSignature(raw, file);
+        } catch (e) {
+          unmanaged.push({ workspace, file, reason: (e as Error).message });
+          continue;
+        }
       } else {
         try {
           parsed = parseJsonc(raw, path.join(workspace, file));
@@ -840,7 +862,7 @@ export async function buildPlan(
       }
       let cluster = byHash.get(normalized);
       if (!cluster) {
-        cluster = { normalized, members: [], parsed };
+        cluster = { normalized, text: normalizeText(raw), members: [], parsed };
         byHash.set(normalized, cluster);
       }
       cluster.members.push(workspace);
@@ -876,10 +898,10 @@ export async function buildPlan(
         ? synthesizePattern([...present], workspaces, globs)
         : undefined;
 
-    if (format === 'text') {
-      // Text has no merge semantics: the default applies wholesale to
+    if (isTextLike(format)) {
+      // Text/TS have no merge semantics: the default applies wholesale to
       // every workspace in scope; later rules replace it entirely.
-      rules.default = mode.normalized;
+      rules.default = clusterValue(mode, format);
       clusters.push({
         file,
         pattern: 'default',
@@ -893,7 +915,7 @@ export async function buildPlan(
           workspaces,
           globs,
         );
-        rules[pattern] = cluster.normalized;
+        rules[pattern] = clusterValue(cluster, format);
         clusters.push({
           file,
           pattern,
@@ -1077,7 +1099,7 @@ export function serializeConfig(config: LoomConfigInput): string {
     value: JsonValue | string,
     format: FileFormat,
   ): JsonValue | string =>
-    format !== 'text' && isPlainObject(value) ? jsonText(value) : value;
+    !isTextLike(format) && isPlainObject(value) ? jsonText(value) : value;
   const files: Record<string, unknown> = {};
   for (const [name, spec] of Object.entries(config.files)) {
     const target = spec.filename ?? name;

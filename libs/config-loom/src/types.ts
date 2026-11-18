@@ -12,9 +12,15 @@ export type JsonObject = { [key: string]: JsonValue };
  * - `json`: strict JSON output (2-space indent).
  * - `jsonc`: like `json`, but reading accepts comments/trailing commas
  *   (tsconfig-style) and the generated header banner is enabled by default.
+ * - `ts`: verbatim TypeScript/JavaScript source supplied by the matching
+ *   rule (last one wins), but equivalence is judged over the token stream:
+ *   files differing only by whitespace, comments, quote style or trailing
+ *   commas are the SAME content (init folds them into one cluster; sync
+ *   leaves a hand-reformatted file alone). Values must still parse as
+ *   TypeScript.
  * - `text`: verbatim content supplied by the matching rule (last one wins).
  */
-export type FileFormat = 'json' | 'jsonc' | 'text';
+export type FileFormat = 'json' | 'jsonc' | 'ts' | 'text';
 
 /**
  * What happens when a rule patch contains an array and the base already has

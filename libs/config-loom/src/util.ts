@@ -1,7 +1,18 @@
-import type { JsonObject, JsonValue } from './types';
+import type { FileFormat, JsonObject, JsonValue } from './types';
 
 export function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Formats whose value is the whole file, replaced verbatim by rules. */
+export function isTextLike(format: FileFormat): boolean {
+  return format === 'text' || format === 'ts';
+}
+
+/** Formats rendered as canonical JSON — the only ones whose canonical bytes
+ * are distinctive enough to prove a generated file's authorship. */
+export function isJsonFormat(format: FileFormat): boolean {
+  return format === 'json' || format === 'jsonc';
 }
 
 export function escapeRegExp(text: string): string {
