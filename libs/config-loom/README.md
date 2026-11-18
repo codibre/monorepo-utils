@@ -404,6 +404,8 @@ config-loom <command> [options]
   --yes              skip the confirmation prompt
   --no-wire          [init] skip the package.json/turbo.json wiring
   --verbose          also list unchanged files
+  -h, --help         show help — works per command: config-loom init --help
+  -v, --version      print the version
 ```
 
 ## Programmatic API
