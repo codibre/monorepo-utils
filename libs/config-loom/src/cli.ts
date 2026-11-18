@@ -6,7 +6,7 @@ import { initRepo, serializeConfig } from './init';
 import { syncAll } from './sync';
 import { deriveOutputs, wireRepo, type WireReport } from './wire';
 import { discoverWorkspaces, type WorkspaceRunner } from './workspaces';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SyncResult } from './types';
@@ -44,11 +44,21 @@ interface RunOpts extends SharedOpts {
 
 interface InitOpts extends RunOpts {
   files?: string;
+  templateThreshold?: number;
   keep?: boolean;
   force?: boolean;
   yes?: boolean;
   wire?: boolean;
 }
+
+/** parseArgs-style validation, phrased as a commander coercion (exit 2). */
+const numberArg = (value: string): number => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throw new InvalidArgumentError(`${value} is not a number`);
+  }
+  return n;
+};
 
 /** Commander errors look like this; we map them onto process exit codes. */
 interface CommanderErrorLike {
@@ -223,6 +233,12 @@ export async function main(
         '--files <a,b,...>',
         'only these file names (default: scan known ones)',
       )
+      .option(
+        '--template-threshold <n>',
+        'rendered values longer than n lines move to .config-loom/ ' +
+          'template files (default: 40; 0 keeps everything inline)',
+        numberArg,
+      )
       .option('--dry-run', 'print what would happen; change nothing')
       .option('--keep', 'leave existing files on disk (sync overwrites)')
       .option('--force', 'overwrite an existing config file')
@@ -235,6 +251,7 @@ export async function main(
       runner: deps.runner,
       noWire: opts.wire === false,
       files: opts.files === undefined ? undefined : commaList(opts.files),
+      templateThreshold: opts.templateThreshold,
       keep: opts.keep === true,
       force: opts.force === true,
       dryRun: opts.dryRun === true,
@@ -255,6 +272,12 @@ export async function main(
         console.log(`#   ${file}`);
       }
       console.log(`# git rm --cached: ${result.untracked.length} file(s)`);
+      if (result.plan.templates.length > 0) {
+        console.log('# template file(s) init would write (commit these):');
+        for (const template of result.plan.templates) {
+          console.log(`#   ${template.path}`);
+        }
+      }
       console.log('# .gitignore block:');
       for (const pattern of result.ignorePatterns) {
         console.log(`#   ${pattern}`);

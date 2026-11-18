@@ -2,6 +2,7 @@ import {
   DEFAULT_CONFIG_FILENAMES,
   compileConfig,
   defaultFormatFor,
+  resolveTemplates,
 } from './config';
 import { computeDelta, tsconfigEqual } from './diff';
 import { stringify } from 'yaml';
@@ -27,7 +28,14 @@ import {
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces, readWorkspaceGlobs } from './workspaces';
 import { deriveOutputs, wireRepo, type WireReport } from './wire';
-import { access, readFile, unlink, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import type {
@@ -73,6 +81,77 @@ const MAX_EXCLUDE_ALTERNATION = 3;
 const GUARD_HANDICAP = 12;
 const ROOT_GUARD_HANDICAP = 24;
 const MAX_EXCLUSION_EXCEPTIONS = 12;
+// Auto-templating (issue #13): rendered values longer than this many lines
+// move out of config-loom.yaml into this repo-root folder, referenced by
+// `template:`. Templates are inputs — the user commits them.
+const TEMPLATE_DIR = '.config-loom';
+export const DEFAULT_TEMPLATE_THRESHOLD = 40;
+
+/** A file init writes under `.config-loom/` and references by `template:`. */
+export interface TemplateFile {
+  /** Repo-relative path, e.g. `.config-loom/eslint.config.mjs/default.mjs`. */
+  path: string;
+  content: string;
+}
+
+/** The exact text serializeConfig would inline for a structured value. */
+function structuredText(value: JsonValue, format: FileFormat): string {
+  return format === 'yaml'
+    ? yamlCanonicalText(value)
+    : `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function lineCount(text: string): number {
+  return text.replace(/\n+$/, '').split('\n').length;
+}
+
+/**
+ * Big values move out of the loom: any rendered value longer than
+ * `threshold` lines becomes a file under `.config-loom/<file>/` referenced
+ * by `template:` — entry defaults and rule values alike. The spec is
+ * rewritten in place; the returned contents are for init to write to disk.
+ */
+function applyAutoTemplates(
+  file: string,
+  spec: FileSpecInput,
+  format: FileFormat,
+  threshold: number,
+): TemplateFile[] {
+  if (!(threshold > 0)) {
+    return [];
+  }
+  const templates: TemplateFile[] = [];
+  const ext = path.posix.extname(file);
+  const move = (
+    value: JsonValue | string | undefined,
+    suffix: string,
+  ): string | undefined => {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const text =
+      typeof value === 'string' ? value : structuredText(value, format);
+    if (lineCount(text) <= threshold) {
+      return undefined;
+    }
+    const rel = path.posix.join(TEMPLATE_DIR, file, `${suffix}${ext}`);
+    templates.push({ path: rel, content: text });
+    return rel;
+  };
+  const defaultRel = move(spec.default, 'default');
+  if (defaultRel !== undefined) {
+    delete spec.default;
+    spec.template = defaultRel;
+  }
+  spec.rules?.forEach((rule, index) => {
+    const ruleRel = move(rule.value, `rule-${index + 1}`);
+    if (ruleRel !== undefined) {
+      delete rule.value;
+      rule.template = ruleRel;
+    }
+  });
+  return templates;
+}
 
 interface Cluster {
   normalized: string;
@@ -101,6 +180,12 @@ export interface InitOptions {
   globs?: string[];
   /** Skip package.json/turbo.json wiring (default: wire). */
   noWire?: boolean;
+  /**
+   * Rendered values longer than this many lines are written as template
+   * files under `.config-loom/` and referenced by `template:` (default:
+   * DEFAULT_TEMPLATE_THRESHOLD; 0 keeps everything inline).
+   */
+  templateThreshold?: number;
 }
 
 export interface ClusterInfo {
@@ -127,6 +212,8 @@ export interface InitPlan {
   unmanaged: Array<{ workspace: string; file: string; reason: string }>;
   /** Discovered workspace directories (used to derive turbo outputs). */
   workspaces: string[];
+  /** Big values moved to `.config-loom/` files, referenced by `template:`. */
+  templates: TemplateFile[];
 }
 
 export interface InitResult {
@@ -809,6 +896,7 @@ export async function buildPlan(
   const managedEntries: Array<{ workspace: string; file: string }> = [];
   const clusters: ClusterInfo[] = [];
   const unmanaged: InitPlan['unmanaged'] = [];
+  const templates: TemplateFile[] = [];
 
   for (const file of requested) {
     let format = defaultFormatFor(file);
@@ -1037,6 +1125,14 @@ export async function buildPlan(
     if (fileExclude && fileExclude.length > 0) {
       spec.exclude = fileExclude;
     }
+    templates.push(
+      ...applyAutoTemplates(
+        file,
+        spec,
+        format,
+        opts.templateThreshold ?? DEFAULT_TEMPLATE_THRESHOLD,
+      ),
+    );
     config.files[file] = spec;
     for (const cluster of sorted) {
       for (const member of cluster.members) {
@@ -1088,6 +1184,7 @@ export async function buildPlan(
     clusters,
     unmanaged,
     workspaces,
+    templates,
   };
 }
 
@@ -1111,11 +1208,11 @@ export function serializeConfig(config: LoomConfigInput): string {
     '# families (`libs/.*`, `.*-rs`) over name lists, so new projects',
     '# joining a shape need no edit here. Instead of an inline value,',
     '# `template: <repo-relative path>` pulls content from a file',
-    "# (multiline text or commented JSONC). After editing, run 'config-loom",
+    '# (multiline text or commented JSONC) — `init` auto-moves values over',
+    '# `--template-threshold` lines to `.config-loom/` that way; commit',
+    "# those files, they are inputs. After editing, run 'config-loom",
     "# sync' (or any turbo command, once wired).",
   ].join('\n');
-  const jsonText = (value: JsonValue): string =>
-    `${JSON.stringify(value, null, 2)}\n`;
   const wireValue = (
     value: JsonValue | string,
     format: FileFormat,
@@ -1126,7 +1223,7 @@ export function serializeConfig(config: LoomConfigInput): string {
     // Structured content is always written as TEXT block scalars — JSON
     // text for json/jsonc, canonical YAML text for yaml — so a managed
     // document never mixes with the loom's own properties.
-    return format === 'yaml' ? yamlCanonicalText(value) : jsonText(value);
+    return structuredText(value, format);
   };
   const files: Record<string, unknown> = {};
   for (const [name, spec] of Object.entries(config.files)) {
@@ -1148,15 +1245,23 @@ export function serializeConfig(config: LoomConfigInput): string {
     if (spec.include !== undefined) {
       out.include = spec.include;
     }
-    if (spec.default !== undefined) {
+    if (spec.template !== undefined) {
+      out.template = spec.template;
+    } else if (spec.default !== undefined) {
       out.default = wireValue(spec.default, format);
     }
     if (spec.rules !== undefined && spec.rules.length > 0) {
-      out.rules = spec.rules.map((rule) => ({
-        pattern: rule.pattern,
-        value:
-          rule.value === undefined ? undefined : wireValue(rule.value, format),
-      }));
+      out.rules = spec.rules.map((rule) =>
+        rule.template !== undefined
+          ? { pattern: rule.pattern, template: rule.template }
+          : {
+              pattern: rule.pattern,
+              value:
+                rule.value === undefined
+                  ? undefined
+                  : wireValue(rule.value, format),
+            },
+      );
     }
     if (spec.exclude !== undefined) {
       out.exclude = spec.exclude;
@@ -1270,6 +1375,18 @@ export async function initRepo(
   }
 
   await writeFile(configPath, serializeConfig(plan.config), 'utf8');
+  // Templates are INPUTS, not outputs: materialize them right away (the
+  // set is deterministic per plan — replace any previous auto-generated
+  // one wholesale) so the freshly written loom resolves its `template:`
+  // references, then commit them together with config-loom.yaml.
+  if (plan.templates.length > 0) {
+    await rm(path.join(root, TEMPLATE_DIR), { recursive: true, force: true });
+    for (const template of plan.templates) {
+      const abs = path.join(root, template.path);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, template.content, 'utf8');
+    }
+  }
   // Conversion: drop the legacy JSON config once the YAML one is in place.
   const legacyRel = legacy === null ? null : path.relative(root, legacy);
   if (legacyRel !== null) {
@@ -1296,7 +1413,10 @@ export async function initRepo(
     }
   }
 
-  const config = compileConfig(plan.config, configPath);
+  const config = compileConfig(
+    await resolveTemplates(plan.config, root),
+    configPath,
+  );
   const sync = await syncAll(config, root);
   const wire = opts.noWire
     ? null
