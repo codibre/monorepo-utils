@@ -106,6 +106,7 @@ jobs:
 
       - name: Publish libraries sequentially
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OIDC_TOKEN: ${{ steps.oidc.outputs.oidc-token }}
           DRY_RUN: ${{ inputs.dry_run }}
           MANUAL_VERSION: ${{ inputs.version }}
