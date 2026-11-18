@@ -35,13 +35,20 @@ export type { CheckResult } from './check';
 export {
   buildPlan,
   initRepo,
+  DEFAULT_TEMPLATE_THRESHOLD,
   serializeConfig,
   synthesizePattern,
   synthesizeExclude,
   globToRegExpSource,
   KNOWN_CONFIG_FILES,
 } from './init';
-export type { InitOptions, InitPlan, InitResult, ClusterInfo } from './init';
+export type {
+  InitOptions,
+  InitPlan,
+  InitResult,
+  ClusterInfo,
+  TemplateFile,
+} from './init';
 export {
   buildGitignoreBlock,
   updateGitignoreBlock,

@@ -13,6 +13,8 @@ import {
 } from '../helpers';
 import { parseJsonc } from '../../src/jsonc';
 import { parse as parseYaml } from 'yaml';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { LoomConfigInput } from '../../src/types';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -613,5 +615,97 @@ describe('loom init YAML wire (pattern prop)', () => {
     expect(es.scopes[0]?.rules[0]?.value).toBe(
       "import x from 'x';\nexport default x;\n",
     );
+  });
+});
+
+describe('init auto-templating (issue #13)', () => {
+  async function makeNoticeRepo(): Promise<string> {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    const big =
+      Array.from({ length: 45 }, (_, i) => `notice line ${i}`).join('\n') +
+      '\n';
+    const variant = big.replace('notice line 10', 'NOTICE TEN differs');
+    await createWorkspace(root, 'apps/a', { 'NOTICE.txt': big });
+    await createWorkspace(root, 'apps/b', { 'NOTICE.txt': big });
+    await createWorkspace(root, 'apps/c', { 'NOTICE.txt': variant });
+    return root;
+  }
+
+  it('moves big default and rule values to .config-loom templates', async () => {
+    const root = await makeNoticeRepo();
+    const big = await readFile(path.join(root, 'apps/a/NOTICE.txt'), 'utf8');
+    const result = await initRepo(root, {
+      runner: fakePnpmRunner,
+      yes: true,
+      noWire: true,
+      files: ['NOTICE.txt'],
+    });
+    expect(result.plan.templates.map((t) => t.path).sort()).toEqual([
+      '.config-loom/NOTICE.txt/default.txt',
+      '.config-loom/NOTICE.txt/rule-1.txt',
+    ]);
+    expect(
+      await readFile(
+        path.join(root, '.config-loom/NOTICE.txt/default.txt'),
+        'utf8',
+      ),
+    ).toBe(big);
+    const written = await readFile(result.configPath, 'utf8');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/default.txt');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/rule-1.txt');
+    expect(written).not.toContain('notice line 0');
+    // Round trip: sync regenerated every file byte-identically from the
+    // templates, and the variant rule still reaches apps/c.
+    const { config } = await loadConfig(root);
+    const check = await checkAll(config, root, { runner: fakePnpmRunner });
+    expect(check.ok).toBe(true);
+    expect(
+      await readFile(path.join(root, 'apps/c/NOTICE.txt'), 'utf8'),
+    ).toContain('NOTICE TEN differs');
+  });
+
+  it('templateThreshold 0 keeps everything inline', async () => {
+    const root = await makeNoticeRepo();
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['NOTICE.txt'],
+      templateThreshold: 0,
+    });
+    expect(plan.templates).toEqual([]);
+    expect(serializeConfig(plan.config)).toContain('notice line 0');
+  });
+
+  it('big structured defaults become JSON text templates', async () => {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    const many = Object.fromEntries(
+      Array.from({ length: 45 }, (_, i) => [`key${i}`, i]),
+    );
+    const text = JSON.stringify(many, null, 2);
+    await createWorkspace(root, 'apps/a', { 'tsconfig.json': text });
+    await createWorkspace(root, 'apps/b', { 'tsconfig.json': text });
+    const result = await initRepo(root, {
+      runner: fakePnpmRunner,
+      yes: true,
+      noWire: true,
+      files: ['tsconfig.json'],
+    });
+    expect(result.plan.templates.map((t) => t.path)).toEqual([
+      '.config-loom/tsconfig.json/default.json',
+    ]);
+    const { config } = await loadConfig(root);
+    const check = await checkAll(config, root, { runner: fakePnpmRunner });
+    expect(check.ok).toBe(true);
   });
 });

@@ -318,6 +318,12 @@ files:
 `template` keeps big payloads out of the config (and syntax-highlighted on
 their own): repo-relative, must stay inside the repo, and — like the config
 itself — it is a turbo task `input`, so editing it re-runs the generator.
+`init` does this for you: any rendered value longer than
+`--template-threshold` lines (default 40) is written to
+`.config-loom/<file>/default<ext>` — or `rule-N<ext>` for rules — and
+referenced by `template:`. Those files are **inputs**: commit them together
+with `config-loom.yaml`. Pass `--template-threshold 0` to keep everything
+inline.
 
 Rule semantics:
 
@@ -398,6 +404,9 @@ config-loom <command> [options]
   --root <dir>       repository root (default cwd)
   --config <path>    config file path (default <root>/config-loom.yaml)
   --files a,b,...    [init] restrict to these file names
+  --template-threshold <n>
+                     [init] values over n lines move to .config-loom/
+                     template files (default 40; 0 keeps everything inline)
   --dry-run          preview, change nothing
   --keep             [init] don't delete existing files
   --force            [init] overwrite the config (removes a legacy JSON one)
