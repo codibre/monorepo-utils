@@ -19,8 +19,13 @@ export type JsonObject = { [key: string]: JsonValue };
  *   leaves a hand-reformatted file alone). Values must still parse as
  *   TypeScript.
  * - `text`: verbatim content supplied by the matching rule (last one wins).
+ * - `yaml`: a YAML document; deep-merged like `json`, but read and compared
+ *   PARSED: indentation, quoting, comments and key order never count as
+ *   drift (list order and scalar types do). Multi-document streams and
+ *   custom tags are rejected instead of silently corrupted. Values are
+ *   YAML text (block scalars, like `json` uses JSON text) or mappings.
  */
-export type FileFormat = 'json' | 'jsonc' | 'ts' | 'text';
+export type FileFormat = 'json' | 'jsonc' | 'yaml' | 'ts' | 'text';
 
 /**
  * What happens when a rule patch contains an array and the base already has

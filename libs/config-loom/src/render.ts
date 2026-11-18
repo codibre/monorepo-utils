@@ -1,4 +1,5 @@
 import { deepMerge } from './merge';
+import { yamlCanonicalText } from './yamlformat';
 import { isTextLike } from './util';
 import type { CompiledFileEntry, CompiledScope, JsonValue } from './types';
 
@@ -61,7 +62,10 @@ export function renderFile(
   for (const match of matches) {
     merged = deepMerge(merged, match.value, scope.arrays);
   }
-  const body = `${JSON.stringify(merged, null, 2)}\n`;
+  const body =
+    scope.format === 'yaml'
+      ? yamlCanonicalText(merged)
+      : `${JSON.stringify(merged, null, 2)}\n`;
   return scope.banner ? `${scope.banner}\n${body}` : body;
 }
 
@@ -86,7 +90,10 @@ export function renderCandidates(entry: CompiledFileEntry): string[] {
       continue;
     }
     const wrap = (v: JsonValue) => {
-      const body = `${JSON.stringify(v, null, 2)}\n`;
+      const body =
+        scope.format === 'yaml'
+          ? yamlCanonicalText(v)
+          : `${JSON.stringify(v, null, 2)}\n`;
       return scope.banner ? `${scope.banner}\n${body}` : body;
     };
     const base = scope.defaultValue;
