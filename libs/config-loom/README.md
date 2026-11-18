@@ -21,17 +21,22 @@ generates every per-project config file from it:
 ```yaml
 files:
   tsconfig.json:
-    # everything starts here
-    default:
-      compilerOptions: { target: es2023, strict: true }
-      include: [src]
+    # everything starts here — JSON stays JSON (a block scalar, not
+    # YAML-prop surgery)
+    default: |
+      {
+        "compilerOptions": { "target": "es2023", "strict": true },
+        "include": ["src"]
+      }
     rules:
       # patterns are regexes matched (full match) against the workspace
       # directory path, deep-merged over the default, top to bottom
       - pattern: libs/.*-application
-        value: { compilerOptions: { composite: true } }
+        value: |
+          { "compilerOptions": { "composite": true } }
       - pattern: apps/bff|apps/vd-gestao-admin
-        value: { compilerOptions: { types: [node] } }
+        value: |
+          { "compilerOptions": { "types": ["node"] } }
 ```
 
 Then every workspace gets its `tsconfig.json` regenerated before any turbo
@@ -80,25 +85,31 @@ pnpm exec config-loom init             # writes config-loom.yaml, deletes the sc
 `init` asks pnpm itself which projects exist (`pnpm -r exec pwd`), scans every workspace for known config
 files (`tsconfig.json`, `eslint.config.mjs`, `vitest.config.mts`,
 `jest.config.js`, `nest-cli.json`, …), clusters them by content, takes the
-majority content as `default`, and emits delta rules for each exception. Rule
-keys are synthesized to stay short and future-proof instead of enumerating
-paths: naming families (`libs/.*-application`), whole directories
-(`apps/.*`), a directory minus a few siblings (`libs/adapters/(?!legacy-sql$|old-auth$).*`),
+shared skeleton as `default`, and emits delta rules for each exception. Keys
+are synthesized to stay short and future-proof instead of enumerating paths:
+naming families (`libs/.*-application`), whole directories (`apps/.*`), a
+directory minus a few siblings (`libs/adapters/(?!legacy-sql$|old-auth$).*`),
 and per-directory composites for clusters spanning several folders
-(`apps/.*|libs/(?:domain/x|shared/(?:a|b))`). Every candidate is validated
-against the current workspace set — a key never over-matches today — and the
-directory-shaped ones keep matching tomorrow, when a new project joins the
-folder. Only when nothing collapses does a key fall back to the exact
-`apps/bff|apps/other` alternation. Use `--files tsconfig.json,eslint.config.mjs`
-to restrict the scope.
+(`apps/.*|libs/(?:domain/x|shared/(?:a|b))`). Workspaces that never had the
+file become `exclude` families — including **broad shape families** derived
+from token boundaries in the missing names (`.*-rs` excludes every rust
+subproject of `fluent-iterable`, present and future). Every candidate —
+rule key or exclude pattern — is validated against the full workspace set:
+it must cover its target and touch nothing it must not, so a key never
+over-matches today, and the shape-based ones keep holding tomorrow when a
+new project joins the family. Only when nothing collapses does a key fall
+back to the exact `apps/bff|apps/other` alternation (and a sparse file
+without a compact cover is scoped with `include`). Use
+`--files tsconfig.json,eslint.config.mjs` to restrict the scope.
 
 tsconfig deltas are computed with TypeScript semantics, not byte equality:
 `./dist` and `dist` address the same directory, and a bare `src` includes
 exactly what `src/**/*` includes. A rule that differs from `default` only in
 such spellings is pruned down to its real differences — e.g. a library whose
 compiler options match the default but simply has no `exclude` ends up as
-`- pattern: libs/delta` carrying `value: { exclude: null }`, and a library
-that is merely spelled differently joins the `default` outright.
+a `libs/delta` rule carrying the JSON text `{ "exclude": null }` (a null
+_inside_ a value removes the inherited key), and a library that is merely
+spelled differently joins the `default` outright.
 
 ### 3. Wire it up — one line (init does it for you)
 
@@ -163,9 +174,11 @@ gitignored files reappear — install already does.
 
 > The template is YAML on purpose: `default` is a plain property, `rules` is
 > a list of `{ pattern, value }` entries (no escaped quotes, no comma wall),
-> text values are native multiline block scalars, big scripts can live in
-> `template:` files instead of the config, and comments document the regex
-> rules right where they matter. The canonical file is `config-loom.yaml`
+> text values are native multiline block scalars — and `json`/`jsonc` values
+> are **JSON text** block scalars too, so a tsconfig stays a tsconfig:
+> readable, diffable, copy-pasteable — big scripts can live in `template:`
+> files instead of the config, and comments document the regex rules right
+> where they matter. The canonical file is `config-loom.yaml`
 > (`config-loom.yml` also loads); the pre-YAML `config-loom.jsonc` /
 > `config-loom.json` are **not** read anymore — `init --force` removes any
 > stray legacy file. Generated files follow the same
@@ -179,10 +192,10 @@ gitignored files reappear — install already does.
 
 Top level:
 
-| Key       | Default  | Meaning                                                     |
-| --------- | -------- | ----------------------------------------------------------- |
-| `exclude` | `[]`     | Globs of workspace directories to skip.                     |
-| `files`   | required | Map of repo-relative (per-workspace) file path → file spec. |
+| Key       | Default  | Meaning                                                              |
+| --------- | -------- | -------------------------------------------------------------------- |
+| `exclude` | `[]`     | Regexes of workspace directories to skip entirely.                   |
+| `files`   | required | Map of entry name → file entry (the entry writes one workspace file). |
 
 Workspace discovery is delegated to pnpm itself — `pnpm -r exec pwd` runs in
 the repo root and every reported directory is a workspace (the root is not).
@@ -191,16 +204,19 @@ pnpm is required **for now**; support for other package managers may come
 later. `pnpm-workspace.yaml` stays a great `inputs` entry in your turbo task
 regardless: adding a project should re-run the generator.
 
-Per-file spec:
+Per-entry fields:
 
 | Key        | Default                                                                                 | Meaning                                                                                                          |
 | ---------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `filename` | the entry's key in `files:`                                                             | The workspace-relative file this entry writes. **Several entries may share one filename** to serve different subsets (see below). |
+| `include`  | every workspace                                                                         | One regex or a list of regexes: the workspace directories this entry generates for.                              |
+| `exclude`  | `[]`                                                                                    | One regex or a list of regexes that must NEVER get this file from this entry — a hard opt-out beating `default` and every rule. Prefer families (`packages/mq-.*`, `.*-rs`) over name lists: new projects joining the family stay excluded for free. |
 | `format`   | `jsonc` for `tsconfig`/`jsconfig`/`*.jsonc`, `json` for other `.json`, `text` otherwise | `json`, `jsonc` (comments tolerated when read) or `text` (verbatim content)                                       |
 | `arrays`   | `replace`                                                                               | What a rule's array does to the base array: `replace`, `concat` or `unique`                                       |
 | `banner`   | `*.jsonc` only: warning comment; else none                                              | Header line. `false` disables; `true`/strings allowed for `jsonc`/`text`.                                         |
-| `default`  | —                                                                                       | Base content for every matching workspace; `null` makes the entry opt-in. Omit together with `template:` when the file is rule-only. |
+| `default`  | required (or `template:`)                                                               | Base content for every workspace in the entry's scope. For `json`/`jsonc` it is JSON text (a block scalar) or a YAML mapping — both parse to the same value; `init` writes JSON text. There is no null/opt-in mode: scope with `include`/`exclude`. |
 | `template` | —                                                                                       | Instead of `default`: a **repo-relative file** used as the base — verbatim for `text`, parsed (comments allowed) for `json`/`jsonc`. |
-| `rules`    | `[]`                                                                                    | Ordered list of `{ pattern, value }` or `{ pattern, template }` entries. A rule without `value`/`template` opts its matches out. |
+| `rules`    | `[]`                                                                                    | Ordered list of `{ pattern, value }` or `{ pattern, template }` entries; values must have content.                |
 
 Text rules read best in YAML — block scalars keep the script verbatim:
 
@@ -211,6 +227,7 @@ files:
     default: |
       import base from '@repo/eslint-config';
       export default base;
+    exclude: libs/.*-legacy # these workspaces never get the file
     rules:
       - pattern: apps/.*-front
         value: |
@@ -218,33 +235,57 @@ files:
           export default front;
       - pattern: libs/other-front
         template: templates/eslint-other-front.mjs # content from a file
-      - pattern: libs/legacy # no `value` → these workspaces get no file
 ```
 
 `template` keeps big payloads out of the config (and syntax-highlighted on
 their own): repo-relative, must stay inside the repo, and — like the config
 itself — it is a turbo task `input`, so editing it re-runs the generator.
-`template: null` means the same as a null `default`/`value`.
 
 Rule semantics:
 
-- `default` (the property above `rules`) is the base content. Every rule
-  `pattern` is a JavaScript regular expression, matched **fully anchored**
-  (`^(?:pattern)$`) against the workspace directory path relative to the
-  repo root (`apps/bff`, `libs/some-ui`…), always with posix separators.
-  Patterns are never special: even `pattern: default` just matches a
-  workspace folder literally named `default`.
+- `default` (the property above `rules`) is the base content — it always
+  exists; which workspaces receive the file is scope (`include`/`exclude`),
+  never content. Every rule `pattern` is a JavaScript regular expression,
+  matched **fully anchored** (`^(?:pattern)$`) against the workspace
+  directory path relative to the repo root (`apps/bff`, `libs/some-ui`…),
+  always with posix separators. Patterns are never special: even
+  `pattern: default` just matches a workspace folder literally named
+  `default`.
 - For `json`/`jsonc`, every matching rule is deep-merged over the accumulated
   value **in declaration order** — the last rule wins on conflicts. Arrays
-  follow `arrays`; everything else is overwritten.
+  follow `arrays`; everything else is overwritten. A `null` **inside** a
+  rule value removes an inherited key (JSON Merge Patch, RFC 7386) — only
+  a whole null value is forbidden.
 - For `text`, the **last matching rule replaces** the content entirely.
-- `default: null` makes an entry opt-in: only workspaces hit by a rule get
-  the file. When a file is missing from some
-  workspaces, `init` prefers a `default` + compact `exclude` family (new
-  projects joining the excluded family are ignored for free); it falls back
-  to opt-in (`default: null`) only when the missing workspaces cannot be
-  covered compactly.
-- Rule values must be objects (`json`/`jsonc`) or strings (`text`).
+- When a file is missing from some workspaces, `init` scopes it instead of
+  opting it in: a `default` + compact `exclude` family when the missing
+  workspaces collapse (`packages/mq-.*`, `.*-rs` — future projects joining
+  the family are ignored for free), otherwise a `default` + `include` over
+  the holders.
+- Rule values must be objects or JSON-text strings (`json`/`jsonc`), or
+  strings (`text`).
+
+### One file, several entries
+
+`files:` keys name entries, not files — `filename:` sets the target, so the
+same file can be generated differently for disjoint subsets. For each
+workspace, the **first** entry whose `include` matches (or has none) is the
+one that renders; if that entry's `exclude` also matches, the workspace gets
+no file — a claiming entry's exclude is decisive and a later entry never
+revives it:
+
+```yaml
+files:
+  tsconfig-lib:
+    filename: tsconfig.json
+    include: libs/.*
+    default: |
+      { "compilerOptions": { "composite": true } }
+  tsconfig-rest:
+    filename: tsconfig.json
+    default: |
+      { "compilerOptions": { "noEmit": true } }
+```
 
 ### What can never be generated
 

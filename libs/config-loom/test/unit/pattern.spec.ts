@@ -28,7 +28,9 @@ describe('synthesizeExclude', () => {
     expect(synthesizeExclude(missing, present, all)).toEqual([
       'packages/.*-medicine-quotation-sdk',
       'packages/mq-.*',
-      'apps/medicine-quotation-cli',
+      // the lonely outlier joins a broad suffix family instead of a raw
+      // name: tomorrow's `apps/whatever-cli` is excluded for free
+      '.*-cli',
     ]);
   });
 

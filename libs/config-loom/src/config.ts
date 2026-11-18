@@ -8,6 +8,7 @@ import type {
   ArrayPolicy,
   CompiledFileEntry,
   CompiledRule,
+  CompiledScope,
   FileFormat,
   JsonValue,
   LoomConfig,
@@ -75,6 +76,7 @@ export function defaultBannerFor(file: string): boolean {
 }
 
 function resolveBanner(
+  label: string,
   file: string,
   format: FileFormat,
   banner: string | boolean | undefined,
@@ -86,7 +88,7 @@ function resolveBanner(
     }
     if (banner === true && format === 'text') {
       errors.push(
-        `files["${file}"]: "banner": true is not supported for text files — provide the banner string explicitly (with its own comment syntax) or omit it`,
+        `files["${label}"]: "banner": true is not supported for text files — provide the banner string explicitly (with its own comment syntax) or omit it`,
       );
     }
     return false;
@@ -95,12 +97,12 @@ function resolveBanner(
     return false;
   }
   if (typeof banner !== 'string') {
-    errors.push(`files["${file}"]: "banner" must be a string, true or false`);
+    errors.push(`files["${label}"]: "banner" must be a string, true or false`);
     return false;
   }
   if (format === 'json') {
     errors.push(
-      `files["${file}"]: "banner" cannot be used with format "json" (comments are not valid JSON) — use format "jsonc" instead`,
+      `files["${label}"]: "banner" cannot be used with format "json" (comments are not valid JSON) — use format "jsonc" instead`,
     );
     return false;
   }
@@ -108,12 +110,99 @@ function resolveBanner(
 }
 
 /**
+ * Compile an `include`/`exclude` prop (a regex string or a list of them)
+ * into anchored regexes. Empty/undefined yields an empty list.
+ */
+function compilePatternList(
+  label: string,
+  field: 'include' | 'exclude',
+  raw: string | string[] | undefined,
+  errors: string[],
+): RegExp[] {
+  if (raw === undefined) {
+    return [];
+  }
+  const list = typeof raw === 'string' ? [raw] : raw;
+  if (!Array.isArray(list)) {
+    errors.push(
+      `files["${label}"]: "${field}" must be a string or a list of strings`,
+    );
+    return [];
+  }
+  const out: RegExp[] = [];
+  for (const key of list) {
+    if (typeof key !== 'string' || key.length === 0) {
+      errors.push(
+        `files["${label}"]: ${field} pattern must be a non-empty string`,
+      );
+      continue;
+    }
+    try {
+      out.push(new RegExp(`^(?:${key})$`));
+    } catch (e) {
+      errors.push(
+        `files["${label}"]: ${field} "${key}" is not a valid regular expression: ${
+          (e as Error).message
+        }`,
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Normalize a written value against the format. `json`/`jsonc` accept a
+ * plain object OR a string containing JSONC text (YAML block scalar) —
+ * strings are parsed eagerly so a broken template fails at load, not at
+ * render. `text` accepts strings only.
+ */
+function parseValue(
+  label: string,
+  where: string,
+  raw: unknown,
+  format: FileFormat,
+  errors: string[],
+): JsonValue | string | undefined {
+  if (format === 'text') {
+    if (typeof raw === 'string') {
+      return raw;
+    }
+    errors.push(`files["${label}"]: ${where} must be a string for text files`);
+    return undefined;
+  }
+  if (isPlainObject(raw)) {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    let parsed: JsonValue;
+    try {
+      parsed = parseJsonc(raw, `${where} text`);
+    } catch (e) {
+      errors.push(`files["${label}"]: ${(e as Error).message}`);
+      return undefined;
+    }
+    if (!isPlainObject(parsed)) {
+      errors.push(
+        `files["${label}"]: ${where} text must contain a JSON object for ${format} files`,
+      );
+      return undefined;
+    }
+    return parsed;
+  }
+  errors.push(
+    `files["${label}"]: ${where} must be an object (or a string of ${format} text)`,
+  );
+  return undefined;
+}
+
+/**
  * Compile the YAML rules list. Every entry is a regex rule — the base
- * content is the spec-level `default` property, so a pattern of `default`
- * legitimately matches a workspace folder named `default`.
+ * content is the entry-level `default` property, so a pattern of `default`
+ * legitimately matches a workspace folder named `default`. Rule values
+ * must have content: scoping is the job of `include`/`exclude`.
  */
 export function compileRules(
-  file: string,
+  label: string,
   format: FileFormat,
   rules: RuleInput[],
   errors: string[],
@@ -124,15 +213,15 @@ export function compileRules(
   rules.forEach((entry, index) => {
     if (!isPlainObject(entry)) {
       errors.push(
-        `files["${file}"]: rules[${index}] must be an object with a "pattern" prop`,
+        `files["${label}"]: rules[${index}] must be an object with a "pattern" prop`,
       );
       return;
     }
-    const record = entry as Record<string, JsonValue | string | null>;
+    const record = entry as Record<string, unknown>;
     const pattern = record.pattern;
     if (typeof pattern !== 'string' || pattern.length === 0) {
       errors.push(
-        `files["${file}"]: rules[${index}] needs a non-empty string "pattern"`,
+        `files["${label}"]: rules[${index}] needs a non-empty string "pattern"`,
       );
       return;
     }
@@ -141,34 +230,35 @@ export function compileRules(
     );
     if (unknown.length > 0) {
       errors.push(
-        `files["${file}"]: rules[${index}] has unknown prop(s) ${unknown.join(', ')} — only "pattern", "value" and "template" are allowed`,
+        `files["${label}"]: rules[${index}] has unknown prop(s) ${unknown.join(', ')} — only "pattern", "value" and "template" are allowed`,
       );
       return;
     }
-    const value = record.value ?? null;
     if (
-      value !== null &&
-      (format === 'text' ? typeof value !== 'string' : !isPlainObject(value))
+      !('value' in record) ||
+      record.value === null ||
+      record.value === undefined
     ) {
       errors.push(
-        `files["${file}"]: rule "${pattern}" must ${
-          format === 'text'
-            ? 'be a string for text files'
-            : `be an object for ${format} files`
-        }`,
+        `files["${label}"]: rule "${pattern}" needs a "value" — values must have content (use "include"/"exclude" to scope workspaces out)`,
       );
+      return;
+    }
+    const value = parseValue(
+      label,
+      `rule "${pattern}"`,
+      record.value,
+      format,
+      errors,
+    );
+    if (value === undefined) {
       return;
     }
     try {
-      compiled.push({
-        pattern,
-        // Validate the user regex eagerly, wrapped anchored.
-        regex: new RegExp(`^(?:${pattern})$`),
-        value,
-      });
+      compiled.push({ pattern, regex: new RegExp(`^(?:${pattern})$`), value });
     } catch (e) {
       errors.push(
-        `files["${file}"]: rule "${pattern}" is not a valid regular expression: ${
+        `files["${label}"]: rule "${pattern}" is not a valid regular expression: ${
           (e as Error).message
         }`,
       );
@@ -177,126 +267,125 @@ export function compileRules(
   return compiled;
 }
 
+/** Normalize a workspace-relative target path. */
+function normalizeTarget(raw: string): string {
+  return raw.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
 export function compileConfig(
   input: LoomConfigInput,
   label: string,
 ): LoomConfig {
   if (!isPlainObject(input)) {
-    throw new LoomError(`${label}: expected a JSON object at the top level`);
+    throw new LoomError(`${label}: expected a YAML mapping at the top level`);
   }
   const errors: string[] = [];
   if (!isPlainObject(input.files) || Object.keys(input.files).length === 0) {
-    throw new LoomError(`${label}: "files" must be a non-empty object`);
+    throw new LoomError(`${label}: "files" must be a non-empty mapping`);
   }
 
   const files: Record<string, CompiledFileEntry> = {};
-  for (const [rawName, spec] of Object.entries(input.files)) {
-    const file = rawName.replace(/\\/g, '/').replace(/^\.\//, '');
-    const basename = file.slice(file.lastIndexOf('/') + 1).toLowerCase();
-    if (path.isAbsolute(file) || file.split('/').includes('..')) {
+  for (const [entryName, spec] of Object.entries(input.files)) {
+    if (!isPlainObject(spec)) {
       errors.push(
-        `files["${rawName}"]: must be a relative path without ".." segments`,
+        `files["${entryName}"]: expected an object with "default" and "rules"`,
+      );
+      continue;
+    }
+    const file = normalizeTarget(spec.filename ?? entryName);
+    const labelName =
+      spec.filename !== undefined ? `${entryName} → ${file}` : entryName;
+    const basename = file.slice(file.lastIndexOf('/') + 1).toLowerCase();
+    if (
+      file.length === 0 ||
+      path.isAbsolute(file) ||
+      file.split('/').includes('..')
+    ) {
+      errors.push(
+        `files["${labelName}"]: filename must be a relative path without ".." segments`,
       );
       continue;
     }
     if (FORBIDDEN_BASENAMES.has(basename)) {
       errors.push(
-        `files["${rawName}"]: "${basename}" can never be generated by config-loom (owned by pnpm/git/tooling itself)`,
+        `files["${labelName}"]: "${basename}" can never be generated by config-loom (owned by pnpm/git/tooling itself)`,
       );
-      continue;
-    }
-    if (!isPlainObject(spec)) {
-      errors.push(`files["${rawName}"]: expected an object with "rules"`);
       continue;
     }
     const format = spec.format ?? defaultFormatFor(file);
     if (!FORMATS.has(format)) {
       errors.push(
-        `files["${rawName}"]: unknown format "${format}" (use json, jsonc or text)`,
+        `files["${labelName}"]: unknown format "${format}" (use json, jsonc or text)`,
       );
       continue;
     }
     const arrays = spec.arrays ?? 'replace';
     if (!ARRAY_POLICIES.has(arrays)) {
       errors.push(
-        `files["${rawName}"]: unknown arrays policy "${arrays}" (use replace, concat or unique)`,
+        `files["${labelName}"]: unknown arrays policy "${arrays}" (use replace, concat or unique)`,
       );
       continue;
     }
     if ('template' in spec) {
       errors.push(
-        `files["${rawName}"]: "template" must be resolved before compiling — load the file with loadConfig (or call resolveTemplates first)`,
+        `files["${labelName}"]: "template" must be resolved before compiling — load the file with loadConfig (or call resolveTemplates first)`,
       );
       continue;
     }
     if (spec.rules !== undefined && !Array.isArray(spec.rules)) {
       errors.push(
-        `files["${rawName}"]: "rules" must be a list of { pattern, value } entries`,
+        `files["${labelName}"]: "rules" must be a list of { pattern, value } entries`,
       );
       continue;
     }
-    const hasDefaultProp = 'default' in spec;
-    if (!hasDefaultProp && (spec.rules?.length ?? 0) === 0) {
+    if (!('default' in spec)) {
       errors.push(
-        `files["${rawName}"]: needs a "default" value and/or at least one rule`,
+        `files["${labelName}"]: "default" is required (or a "template" file) — every generated file has base content; use "include" to restrict which workspaces get it`,
       );
       continue;
     }
-    const banner = resolveBanner(file, format, spec.banner, errors);
-    const rules = compileRules(file, format, spec.rules ?? [], errors);
-    const hasDefault = hasDefaultProp;
-    let defaultValue: JsonValue | string | null = null;
-    if (hasDefaultProp) {
-      const base = spec.default ?? null;
-      if (
-        base !== null &&
-        (format === 'text' ? typeof base !== 'string' : !isPlainObject(base))
-      ) {
-        errors.push(
-          `files["${file}"]: "default" must ${
-            format === 'text'
-              ? 'be a string for text files'
-              : `be an object for ${format} files`
-          }`,
-        );
-        continue;
-      }
-      defaultValue = base;
+    if (spec.default === null) {
+      errors.push(
+        `files["${labelName}"]: "default" must have a value — null is not supported; use "include"/"exclude" to restrict scope`,
+      );
+      continue;
     }
-    const exclude: RegExp[] = [];
-    if (spec.exclude !== undefined) {
-      if (!Array.isArray(spec.exclude)) {
-        errors.push(`files["${file}"]: "exclude" must be an array of strings`);
-      } else {
-        for (const key of spec.exclude) {
-          if (typeof key !== 'string') {
-            errors.push(`files["${file}"]: exclude pattern must be a string`);
-            continue;
-          }
-          try {
-            new RegExp(key);
-          } catch (e) {
-            errors.push(
-              `files["${file}"]: exclude "${key}" is not a valid regular expression: ${
-                (e as Error).message
-              }`,
-            );
-            continue;
-          }
-          exclude.push(new RegExp(`^(?:${key})$`));
-        }
-      }
+    const defaultValue = parseValue(
+      labelName,
+      '"default"',
+      spec.default,
+      format,
+      errors,
+    );
+    if (defaultValue === undefined) {
+      continue;
     }
-    files[file] = {
-      file,
+    const banner = resolveBanner(labelName, file, format, spec.banner, errors);
+    const include = compilePatternList(
+      labelName,
+      'include',
+      spec.include,
+      errors,
+    );
+    const exclude = compilePatternList(
+      labelName,
+      'exclude',
+      spec.exclude,
+      errors,
+    );
+    const rules = compileRules(labelName, format, spec.rules ?? [], errors);
+
+    const scope: CompiledScope = {
+      include,
+      exclude,
       format,
       arrays,
       banner,
-      exclude,
-      hasDefault,
       defaultValue,
       rules,
     };
+    const entry = (files[file] ??= { file, scopes: [] });
+    entry.scopes.push(scope);
   }
 
   if ('workspaces' in input) {
@@ -326,10 +415,10 @@ async function readTemplate(
   template: string,
   format: FileFormat,
   errors: string[],
-): Promise<JsonValue | string | null> {
+): Promise<JsonValue | string | undefined> {
   if (typeof template !== 'string' || template.length === 0) {
     errors.push(`${label}: "template" must be a non-empty repo-relative path`);
-    return null;
+    return undefined;
   }
   const target = path.resolve(root, template);
   const rootDir = path.resolve(root);
@@ -337,14 +426,14 @@ async function readTemplate(
     errors.push(
       `${label}: template "${template}" must stay inside the repository`,
     );
-    return null;
+    return undefined;
   }
   let text: string;
   try {
     text = await readFile(target, 'utf8');
   } catch {
     errors.push(`${label}: template "${template}" not found`);
-    return null;
+    return undefined;
   }
   if (format === 'text') {
     return text;
@@ -353,14 +442,13 @@ async function readTemplate(
     return parseJsonc(text, `template "${template}"`);
   } catch (e) {
     errors.push(`${label}: ${(e as Error).message}`);
-    return null;
+    return undefined;
   }
 }
 
 /**
- * Replace every `template` reference (spec-level for `default`, or per-rule
- * for `value`) with the file content, before compilation. `template: null`
- * means the same as a null value (opt-in base / opt-out rule).
+ * Replace every `template` reference (entry-level for `default`, or per-rule
+ * for `value`) with the file content, before compilation.
  */
 export async function resolveTemplates(
   input: LoomConfigInput,
@@ -378,31 +466,26 @@ export async function resolveTemplates(
       continue;
     }
     const label = `files["${name}"]`;
-    const format = spec.format ?? defaultFormatFor(name);
+    const target =
+      spec.filename !== undefined ? normalizeTarget(spec.filename) : name;
+    const format = spec.format ?? defaultFormatFor(target);
     const next: Record<string, unknown> = { ...spec };
     if ('template' in next) {
       const template = next.template;
       delete next.template;
-      if (template === null || template === undefined) {
-        if ('default' in next) {
-          errors.push(
-            `${label}: "template: null" conflicts with a "default" prop`,
-          );
-        } else {
-          next.default = null;
-        }
-      } else if ('default' in next) {
+      if ('default' in next) {
         errors.push(
           `${label}: "template" and "default" are mutually exclusive`,
         );
-      } else {
-        next.default = await readTemplate(
-          root,
-          label,
-          template as string,
-          format,
-          errors,
+      } else if (typeof template !== 'string') {
+        errors.push(
+          `${label}: "template" must be a repo-relative path string (null values are not supported)`,
         );
+      } else {
+        const value = await readTemplate(root, label, template, format, errors);
+        if (value !== undefined) {
+          next.default = value;
+        }
       }
     }
     if (Array.isArray(next.rules)) {
@@ -416,26 +499,25 @@ export async function resolveTemplates(
         const template = entry.template;
         delete entry.template;
         const ruleLabel = `${label} rules[${index}]`;
-        if (template === null || template === undefined) {
-          if ('value' in entry) {
-            errors.push(
-              `${ruleLabel}: "template: null" conflicts with a "value" prop`,
-            );
-          } else {
-            entry.value = null;
-          }
-        } else if ('value' in entry) {
+        if ('value' in entry) {
           errors.push(
             `${ruleLabel}: "template" and "value" are mutually exclusive`,
           );
+        } else if (typeof template !== 'string') {
+          errors.push(
+            `${ruleLabel}: "template" must be a repo-relative path string (null values are not supported)`,
+          );
         } else {
-          entry.value = await readTemplate(
+          const value = await readTemplate(
             root,
             ruleLabel,
-            template as string,
+            template,
             format,
             errors,
           );
+          if (value !== undefined) {
+            entry.value = value;
+          }
         }
         resolved.push(entry);
       }

@@ -97,7 +97,8 @@ export interface ClusterInfo {
   members: string[];
   /**
    * `default` = covered by the default value, `delta`/`full` = rule value,
-   * `excluded` = null rule (workspaces that never had the file opt out).
+   * `excluded` = the file-level `exclude` family (workspaces that never
+   * had the file and will not get it).
    */
   kind: 'default' | 'delta' | 'full' | 'excluded';
 }
@@ -262,6 +263,72 @@ function bestFamily(keysPerName: string[][], minLength: number): string | null {
   return bestCount >= 2 ? best : null;
 }
 
+/** Minimal meaningful text (delimiter included) for a broad shape tail/head
+ * — `-rs`, `mq-` qualify; raw character fragments do not. */
+const BROAD_SHAPE_MIN = 3;
+
+/**
+ * The most promising delimiter-anchored broad regex over a set of paths:
+ * tails like `.*-rs`, heads like `mq-.*`. Every delimiter position of every
+ * remaining path yields at most two candidates (each a whole token, never
+ * a character fragment); each candidate is validated once against the full
+ * workspace set — touching a `present` workspace rejects it — then ranked
+ * by remaining coverage (desc) and pattern length (asc). Total cost is
+ * linear in the combined path length, so running it per exclusion round is
+ * cheap even for large workspaces.
+ */
+function bestBroadShape(
+  remaining: string[],
+  allWorkspaces: string[],
+  present: Set<string>,
+): string | null {
+  let best: { pattern: string; coverage: number } | null = null;
+  const seen = new Set<string>();
+  for (const ws of remaining) {
+    for (let i = 0; i < ws.length; i++) {
+      // Naming boundaries only (`-`, `_`, `.`): `/`-anchored shapes are the
+      // directory logic's job and crossing directories silently would make
+      // `.*\/ui` swallow a future `apps/ui` that should get the file.
+      if (/[a-zA-Z0-9/]/.test(ws[i] as string)) {
+        continue;
+      }
+      const candidates: Array<[string, number]> = [
+        [`.*${escapeRegExp(ws.slice(i))}`, ws.length - i],
+        [`${escapeRegExp(ws.slice(0, i + 1))}.*`, i + 1],
+      ];
+      for (const [candidate, textLength] of candidates) {
+        if (seen.has(candidate) || textLength < BROAD_SHAPE_MIN) {
+          continue;
+        }
+        seen.add(candidate);
+        const regex = new RegExp(`^(?:${candidate})$`);
+        if (
+          allWorkspaces.some((other) => present.has(other) && regex.test(other))
+        ) {
+          continue;
+        }
+        let coverage = 0;
+        for (const other of remaining) {
+          if (regex.test(other)) {
+            coverage++;
+          }
+        }
+        if (coverage === 0) {
+          continue;
+        }
+        if (
+          best === null ||
+          coverage > best.coverage ||
+          (coverage === best.coverage && candidate.length < best.pattern.length)
+        ) {
+          best = { pattern: candidate, coverage };
+        }
+      }
+    }
+  }
+  return best?.pattern ?? null;
+}
+
 /**
  * Collapse workspaces that LACK a file into a few directory/naming-family
  * regexes usable as a file-level `exclude` list (see FileSpecInput.exclude).
@@ -269,10 +336,12 @@ function bestFamily(keysPerName: string[][], minLength: number): string | null {
  * A candidate is only accepted when it matches none of the `present`
  * workspaces — the exclusion can never swallow a project that has the file
  * today. Families are discovered from hyphen-aligned name tokens
- * (`packages/mq-.*`, `packages/.*-medicine-quotation-sdk`) or from a parent
- * directory whose whole subtree lacks the file. When the missing workspaces
- * cannot be covered compactly the result is `null` and the caller must keep
- * the file opt-in instead of enumerating names (drift).
+ * (`packages/mq-.*`, `packages/.*-medicine-quotation-sdk`), from broad
+ * delimiter-anchored shapes no 2-member group revealed (`.*-rs`), or from a
+ * parent directory whose whole subtree lacks the file. When the missing
+ * workspaces cannot be covered compactly the result is `null` and the
+ * caller must scope the file with an `include` over its holders instead of
+ * enumerating names (drift).
  */
 export function synthesizeExclude(
   missing: string[],
@@ -357,6 +426,16 @@ export function synthesizeExclude(
       }
       if (progressed) {
         break;
+      }
+    }
+    if (!progressed) {
+      // Broad naming shapes a 2-member group never revealed: delimiter-
+      // anchored tails like `.*-rs` or heads like `mq-.*`. An outlier with
+      // no sibling today may still head a family — the shape also keeps
+      // tomorrow's siblings excluded for free.
+      const broad = bestBroadShape([...remaining], allWorkspaces, present);
+      if (broad !== null && accept(broad)) {
+        progressed = true;
       }
     }
     if (!progressed) {
@@ -783,27 +862,31 @@ export async function buildPlan(
     const rules: Record<string, JsonValue | string | null> = {};
     let fileExclude: string[] | undefined;
 
+    // Sparse files (some workspaces lack them) are SCOPED, never opted-in
+    // with a null default: prefer a compact `exclude` family (new projects
+    // joining the default shape inherit the file automatically, ones
+    // joining an excluded family are ignored for free); fall back to an
+    // `include` over the holders when the missing set is scattered and no
+    // family covers it.
+    const excluded = fullCoverage
+      ? []
+      : synthesizeExclude(missing, present, workspaces);
+    const includePattern =
+      !fullCoverage && excluded === null
+        ? synthesizePattern([...present], workspaces, globs)
+        : undefined;
+
     if (format === 'text') {
-      // Text has no merge semantics: a default applies wholesale to every
-      // workspace. Safe when every workspace holds the file, or when the
-      // workspaces lacking it collapse into a compact `exclude` family —
-      // same law as JSON below. Otherwise stay opt-in (`default: null`).
-      const excluded = fullCoverage
-        ? []
-        : synthesizeExclude(missing, present, workspaces);
-      const useDefault = fullCoverage || excluded !== null;
-      if (useDefault) {
-        rules.default = mode.normalized;
-        clusters.push({
-          file,
-          pattern: 'default',
-          members: [...mode.members],
-          kind: 'default',
-        });
-      } else {
-        rules.default = null;
-      }
-      for (const cluster of useDefault ? sorted.slice(1) : sorted) {
+      // Text has no merge semantics: the default applies wholesale to
+      // every workspace in scope; later rules replace it entirely.
+      rules.default = mode.normalized;
+      clusters.push({
+        file,
+        pattern: 'default',
+        members: [...mode.members],
+        kind: 'default',
+      });
+      for (const cluster of sorted.slice(1)) {
         const pattern = uniquePattern(
           rules,
           cluster.members,
@@ -828,33 +911,19 @@ export async function buildPlan(
         });
       }
     } else {
-      // JSON/JSONC defaults — `default` is the common base; every matching
-      // rule deep-merges on top of it, so specific props win.
-      // - full coverage: default = the majority cluster, everything else is
-      //   a delta against it.
-      // - partial coverage: default is only safe when the workspaces that
-      //   lack the file collapse into a compact `exclude` family list
-      //   (packages/mq-.*, packages/.*-medicine-quotation-sdk): new projects
-      //   joining the default shape inherit the file immediately, and ones
-      //   joining an excluded family are ignored for free. Without a compact
-      //   cover the file stays opt-in (`default: null`) — an 18-name
-      //   exclusion would be drift waiting for the next added project.
-      const excluded = fullCoverage
-        ? []
-        : synthesizeExclude(missing, present, workspaces);
-      const useDefault = fullCoverage || excluded !== null;
-      rules.default = useDefault ? clusterValue(mode, format) : null;
-      const deltaBase = useDefault ? mode.parsed : null;
-      if (useDefault) {
-        clusters.push({
-          file,
-          pattern: 'default',
-          members: [...mode.members],
-          kind: 'default',
-        });
-      }
+      // JSON/JSONC: `default` is the common base (always present — scope
+      // comes from `include`/`exclude`, never from a null default); every
+      // matching rule deep-merges on top of it, so specific props win.
+      rules.default = clusterValue(mode, format);
+      const deltaBase = mode.parsed;
+      clusters.push({
+        file,
+        pattern: 'default',
+        members: [...mode.members],
+        kind: 'default',
+      });
       for (const cluster of sorted) {
-        if (useDefault && cluster === mode) {
+        if (cluster === mode) {
           continue;
         }
         let value: JsonValue;
@@ -912,13 +981,13 @@ export async function buildPlan(
 
     // `default` is emitted as a spec property ABOVE `rules` — never as a
     // pattern — so a workspace folder literally named `default` can be
-    // matched by a rule.
+    // matched by a rule. Sparse coverage rides on `include` (holders) or
+    // `exclude` (missing families), never on a null default.
     const spec: FileSpecInput = {
       format,
       arrays: 'replace',
-      ...(Object.prototype.hasOwnProperty.call(rules, 'default')
-        ? { default: rules['default'] ?? null }
-        : {}),
+      ...(includePattern !== undefined ? { include: includePattern } : {}),
+      default: rules['default'],
       rules: Object.entries(rules)
         .filter(([pattern]) => pattern !== 'default')
         .map(([pattern, value]) => ({ pattern, value })),
@@ -933,13 +1002,11 @@ export async function buildPlan(
       }
     }
     // Files that exist but could not be parsed are still taken over (sync
-    // regenerates them from the default) whenever a default applies —
-    // otherwise they would stay tracked and permanently dirty.
-    if (rules.default !== null) {
-      for (const entry of unmanaged) {
-        if (entry.file === file && present.has(entry.workspace)) {
-          managedEntries.push({ workspace: entry.workspace, file });
-        }
+    // regenerates them from the default) — otherwise they would stay
+    // tracked and permanently dirty.
+    for (const entry of unmanaged) {
+      if (entry.file === file && present.has(entry.workspace)) {
+        managedEntries.push({ workspace: entry.workspace, file });
       }
     }
   }
@@ -985,25 +1052,40 @@ export async function buildPlan(
 export function serializeConfig(config: LoomConfigInput): string {
   const header = [
     '# Managed by config-loom.',
-    '# `default:` (above `rules`) is the base content every matching',
-    '# workspace starts from; `default: null` makes the entry opt-in (only',
-    '# workspaces hit by a rule get the file). Each rule is a `pattern` (a',
-    '# regular expression matched full against the workspace directory',
-    '# path) and a `value`. Order matters: rules merge over default and',
-    '# each other, top to bottom, later rules win; a rule whose value is',
-    '# null opts its matches out of the file. A null INSIDE a rule value',
-    '# removes an inherited key (JSON Merge Patch, RFC 7386). A per-file',
-    '# "exclude" list is a hard opt-out beating default and rules.',
-    '# Prefer directory-shaped patterns (apps/.*, libs/foo-.*) so new',
-    '# projects joining a shape need no edit here. Instead of an inline',
-    '# value, `template: <repo-relative path>` pulls content from a file',
-    '# (multiline text or commented JSONC). Multiline inline values use',
-    '# plain YAML block scalars.',
-    "# After editing, run 'config-loom sync' (or any turbo command, once wired).",
+    '# Each `files:` entry writes one workspace file. The entry key names',
+    '# it; `filename:` sets the target file (default: the key), so several',
+    '# entries may share one filename to serve different workspace subsets',
+    '# — for a workspace, the FIRST entry whose `include` matches and whose',
+    '# `exclude` does not is the one that renders. `include` and `exclude`',
+    '# take one regular expression or a list, matched full against the',
+    '# workspace directory path; omit `include` to cover every workspace.',
+    '# `default:` is the required base content of the entry. Each rule is a',
+    '# `pattern` (same regex syntax) and a `value`. Order matters: rules',
+    '# merge over default and each other, top to bottom, later rules win.',
+    '# A null INSIDE a rule value removes an inherited key (JSON Merge',
+    '# Patch, RFC 7386). For json/jsonc, values are written as plain',
+    '# JSON/JSONC text block scalars — JSON stays readable as JSON. Prefer',
+    '# families (`libs/.*`, `.*-rs`) over name lists, so new projects',
+    '# joining a shape need no edit here. Instead of an inline value,',
+    '# `template: <repo-relative path>` pulls content from a file',
+    "# (multiline text or commented JSONC). After editing, run 'config-loom",
+    "# sync' (or any turbo command, once wired).",
   ].join('\n');
+  const jsonText = (value: JsonValue): string =>
+    `${JSON.stringify(value, null, 2)}\n`;
+  const wireValue = (
+    value: JsonValue | string,
+    format: FileFormat,
+  ): JsonValue | string =>
+    format !== 'text' && isPlainObject(value) ? jsonText(value) : value;
   const files: Record<string, unknown> = {};
   for (const [name, spec] of Object.entries(config.files)) {
+    const target = spec.filename ?? name;
+    const format = spec.format ?? defaultFormatFor(target);
     const out: Record<string, unknown> = {};
+    if (spec.filename !== undefined) {
+      out.filename = spec.filename;
+    }
     if (spec.format !== undefined) {
       out.format = spec.format;
     }
@@ -1013,13 +1095,17 @@ export function serializeConfig(config: LoomConfigInput): string {
     if (spec.banner !== undefined) {
       out.banner = spec.banner;
     }
+    if (spec.include !== undefined) {
+      out.include = spec.include;
+    }
     if (spec.default !== undefined) {
-      out.default = spec.default;
+      out.default = wireValue(spec.default, format);
     }
     if (spec.rules !== undefined && spec.rules.length > 0) {
       out.rules = spec.rules.map((rule) => ({
         pattern: rule.pattern,
-        value: rule.value ?? null,
+        value:
+          rule.value === undefined ? undefined : wireValue(rule.value, format),
       }));
     }
     if (spec.exclude !== undefined) {

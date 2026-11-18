@@ -33,10 +33,13 @@ describe('compileConfig', () => {
     const config = compileConfig(minimal(), 'test');
     const entry = config.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.format).toBe('jsonc');
-    expect(entry.arrays).toBe('replace');
-    expect(entry.banner).toBe(false);
-    expect(entry.hasDefault).toBe(true);
+    expect(entry.scopes).toHaveLength(1);
+    const scope = entry.scopes[0]!;
+    expect(scope.format).toBe('jsonc');
+    expect(scope.arrays).toBe('replace');
+    expect(scope.banner).toBe(false);
+    expect(scope.include).toHaveLength(0);
+    expect(scope.exclude).toHaveLength(0);
   });
 
   it('banners *.jsonc by default; tsconfig only when explicitly asked', () => {
@@ -52,8 +55,12 @@ describe('compileConfig', () => {
       },
       'test',
     );
-    expect(config.files['renovate.jsonc']?.banner).toContain('config-loom');
-    expect(config.files['tsconfig.json']?.banner).toBe('/* hand-written */');
+    expect(config.files['renovate.jsonc']?.scopes[0]?.banner).toContain(
+      'config-loom',
+    );
+    expect(config.files['tsconfig.json']?.scopes[0]?.banner).toBe(
+      '/* hand-written */',
+    );
   });
 
   it('rejects the legacy workspaces key', () => {
@@ -75,8 +82,8 @@ describe('compileConfig', () => {
     );
     const entry = config.files['eslint.config.mjs'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.format).toBe('text');
-    expect(entry.banner).toBe(false);
+    expect(entry.scopes[0]?.format).toBe('text');
+    expect(entry.scopes[0]?.banner).toBe(false);
   });
 
   it('refuses to generate package.json', () => {
@@ -88,12 +95,18 @@ describe('compileConfig', () => {
     ).toThrow(/can never be generated/);
   });
 
-  it('refuses absolute paths and .. escapes', () => {
+  it('refuses absolute paths and .. escapes (filename prop included)', () => {
     expect(() =>
       compileConfig({ files: { '/etc/passwd.json': { default: {} } } }, 'test'),
     ).toThrow(/relative path/);
     expect(() =>
       compileConfig({ files: { '../outside.json': { default: {} } } }, 'test'),
+    ).toThrow(/relative path/);
+    expect(() =>
+      compileConfig(
+        { files: { alias: { filename: '../escape.json', default: {} } } },
+        'test',
+      ),
     ).toThrow(/relative path/);
   });
 
@@ -144,49 +157,55 @@ describe('compileConfig', () => {
     );
     const entry = config.files['a.json'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.rules.map((rule) => rule.pattern)).toEqual([
+    expect(entry.scopes[0]?.rules.map((rule) => rule.pattern)).toEqual([
       'libs/.*',
       'libs/special',
     ]);
   });
 
-  it('accepts default: null (opt-in mode) and null opt-out rules', () => {
-    const config = compileConfig(
-      {
-        files: {
-          'a.json': {
-            default: null,
-            rules: [{ pattern: 'apps/x', value: { a: 1 } }],
+  it('rejects null and missing defaults: scoping is include/exclude work', () => {
+    expect(() =>
+      compileConfig(
+        {
+          files: {
+            'a.json': {
+              default: null,
+              rules: [{ pattern: 'apps/x', value: { a: 1 } }],
+            },
           },
         },
-      },
-      'test',
-    );
-    const entry = config.files['a.json'];
-    if (!entry) throw new Error('missing entry');
-    expect(entry.hasDefault).toBe(true);
-    expect(entry.defaultValue).toBeNull();
-
-    // A null rule is a legal opt-out: it compiles and makes renderFile skip.
-    const opted = compileConfig(
-      {
-        files: {
-          'a.json': {
-            default: { a: 1 },
-            rules: [{ pattern: 'apps/x', value: null }],
+        'test',
+      ),
+    ).toThrow(/"default" must have a value/);
+    expect(() =>
+      compileConfig(
+        {
+          files: {
+            'a.json': {
+              rules: [{ pattern: 'apps/x', value: { a: 1 } }],
+            },
           },
         },
-      },
-      'test',
-    );
-    const optedEntry = opted.files['a.json'];
-    if (!optedEntry) throw new Error('missing entry');
-    expect(optedEntry.rules.map((rule) => rule.pattern)).toEqual(['apps/x']);
-    expect(renderFile(optedEntry, 'apps/x')).toBeNull();
-    expect(renderFile(optedEntry, 'apps/y')).toContain('"a": 1');
+        'test',
+      ),
+    ).toThrow(/"default" is required/);
+    // A null rule value is a rejection too — no opt-out semantics left.
+    expect(() =>
+      compileConfig(
+        {
+          files: {
+            'a.json': {
+              default: { a: 1 },
+              rules: [{ pattern: 'apps/x', value: null }],
+            },
+          },
+        },
+        'test',
+      ),
+    ).toThrow(/needs a "value"/);
   });
 
-  it('requires a banner string (not true) on text files and rejects it on json', () => {
+  it('rejects a banner string (true) on text files and any banner on json', () => {
     expect(() =>
       compileConfig(
         { files: { 'x.mjs': { banner: true, default: 'a' } } },
@@ -207,6 +226,108 @@ describe('compileConfig', () => {
         'test',
       ),
     ).toThrow(/cannot be used with format "json"/);
+  });
+
+  it('parses json values written as text (block scalar style)', () => {
+    const config = compileConfig(
+      {
+        files: {
+          'tsconfig.json': {
+            default: '{ "compilerOptions": { "strict": true } }\n',
+          },
+        },
+      },
+      'test',
+    );
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.scopes[0]?.defaultValue).toEqual({
+      compilerOptions: { strict: true },
+    });
+    expect(renderFile(entry, 'libs/x')).toContain('"strict": true');
+  });
+
+  it('rejects broken or non-object json value text', () => {
+    expect(() =>
+      compileConfig(
+        { files: { 'a.json': { format: 'json', default: '{ oops' } } },
+        'test',
+      ),
+    ).toThrow(LoomError);
+    expect(() =>
+      compileConfig(
+        { files: { 'a.json': { format: 'json', default: '[1, 2]' } } },
+        'test',
+      ),
+    ).toThrow(/must contain a JSON object/);
+  });
+
+  it('groups entries sharing one filename; first matching scope renders', () => {
+    const config = compileConfig(
+      {
+        files: {
+          'libs-base': {
+            filename: 'tsconfig.json',
+            include: 'libs/.*',
+            default: { libs: true },
+          },
+          rest: {
+            filename: 'tsconfig.json',
+            default: { rest: true },
+          },
+        },
+      },
+      'test',
+    );
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.scopes).toHaveLength(2);
+    expect(renderFile(entry, 'libs/one')).toContain('"libs": true');
+    expect(renderFile(entry, 'apps/one')).toContain('"rest": true');
+  });
+
+  it('scope exclude is decisive: it hides the file even if a later entry matches', () => {
+    const config = compileConfig(
+      {
+        files: {
+          scoped: {
+            filename: 'tsconfig.json',
+            include: ['libs/.*'],
+            exclude: 'libs/generated/.*',
+            default: { scoped: true },
+          },
+          fallback: {
+            filename: 'tsconfig.json',
+            default: { fallback: true },
+          },
+        },
+      },
+      'test',
+    );
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(renderFile(entry, 'libs/one')).toContain('"scoped": true');
+    expect(renderFile(entry, 'libs/generated/x')).toBeNull();
+    expect(renderFile(entry, 'apps/one')).toContain('"fallback": true');
+  });
+
+  it('rejects invalid include/exclude shapes and regexes', () => {
+    expect(() =>
+      compileConfig(
+        {
+          files: {
+            'a.json': { default: {}, include: 42 as unknown as string },
+          },
+        },
+        'test',
+      ),
+    ).toThrow(/"include" must be a string or a list of strings/);
+    expect(() =>
+      compileConfig(
+        { files: { 'a.json': { default: {}, exclude: 'apps/(' } } },
+        'test',
+      ),
+    ).toThrow(/exclude "apps\/\(" is not a valid regular expression/);
   });
 });
 
@@ -230,7 +351,7 @@ describe('loadConfig', () => {
 });
 
 describe('loadConfig — YAML wire', () => {
-  it('reads a spec-level default above rules, block scalars, opt-out rules', async () => {
+  it('reads default, block scalars, include/exclude regex lists', async () => {
     const root = await makeTempDir();
     await putFile(
       root,
@@ -239,6 +360,10 @@ describe('loadConfig — YAML wire', () => {
         'files:',
         '  eslint.config.mjs:',
         '    format: text',
+        '    include:',
+        '      - apps/.*',
+        '      - libs/.*',
+        '    exclude: libs/generated/.*',
         '    default: |',
         "      import base from '@repo/eslint';",
         '      export default base;',
@@ -247,23 +372,80 @@ describe('loadConfig — YAML wire', () => {
         '        value: |',
         "          import front from '@repo/eslint-front';",
         '          export default front;',
-        '      - pattern: libs/legacy',
       ].join('\n'),
     );
     const { config, path } = await loadConfig(root);
     expect(path).toContain('config-loom.yaml');
     const entry = config.files['eslint.config.mjs'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.hasDefault).toBe(true);
-    expect(entry.defaultValue).toBe(
+    const scope = entry.scopes[0]!;
+    expect(scope.defaultValue).toBe(
       "import base from '@repo/eslint';\nexport default base;\n",
     );
-    expect(entry.rules).toHaveLength(2);
-    expect(entry.rules[0]?.value).toBe(
+    expect(scope.rules).toHaveLength(1);
+    expect(scope.rules[0]?.value).toBe(
       "import front from '@repo/eslint-front';\nexport default front;\n",
     );
-    // a rule without `value` is an opt-out
-    expect(entry.rules[1]?.value).toBeNull();
+    expect(renderFile(entry, 'apps/web-front')).toContain('eslint-front');
+    expect(renderFile(entry, 'libs/core')).toContain('eslint');
+    expect(renderFile(entry, 'libs/generated/x')).toBeNull();
+    expect(renderFile(entry, 'tools/ci')).toBeNull(); // include restricts
+  });
+
+  it('reads json defaults as JSON text block scalars', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      [
+        'files:',
+        '  tsconfig.json:',
+        '    default: |',
+        '      {',
+        '        "compilerOptions": { "strict": true }',
+        '      }',
+        '    rules:',
+        '      - pattern: libs/.*',
+        '        value: |',
+        '          {',
+        '            "compilerOptions": { "composite": true }',
+        '          }',
+      ].join('\n'),
+    );
+    const { config } = await loadConfig(root);
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(renderFile(entry, 'libs/x')).toContain('"composite": true');
+    expect(renderFile(entry, 'libs/x')).toContain('"strict": true');
+    expect(renderFile(entry, 'apps/x')).not.toContain('composite');
+  });
+
+  it('supports multiple entries writing the same filename', async () => {
+    const root = await makeTempDir();
+    await putFile(
+      root,
+      'config-loom.yaml',
+      [
+        'files:',
+        '  tsconfig-libs:',
+        '    filename: tsconfig.json',
+        '    include: libs/.*',
+        '    default: |',
+        '      { "libs": true }',
+        '  tsconfig-apps:',
+        '    filename: tsconfig.json',
+        '    include: apps/.*',
+        '    default: |',
+        '      { "apps": true }',
+      ].join('\n'),
+    );
+    const { config } = await loadConfig(root);
+    const entry = config.files['tsconfig.json'];
+    if (!entry) throw new Error('missing entry');
+    expect(entry.scopes).toHaveLength(2);
+    expect(renderFile(entry, 'libs/x')).toContain('"libs": true');
+    expect(renderFile(entry, 'apps/x')).toContain('"apps": true');
+    expect(renderFile(entry, 'tools/x')).toBeNull();
   });
 
   it('treats the pattern `default` as a literal workspace path', async () => {
@@ -285,10 +467,11 @@ describe('loadConfig — YAML wire', () => {
     const { config } = await loadConfig(root);
     const entry = config.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.rules.map((rule) => rule.pattern)).toEqual(['default']);
-    expect(entry.defaultValue).toEqual({ a: 1 });
+    const scope = entry.scopes[0]!;
+    expect(scope.rules.map((rule) => rule.pattern)).toEqual(['default']);
+    expect(scope.defaultValue).toEqual({ a: 1 });
     // a workspace literally named `default` hits the rule
-    expect(entry.rules[0]?.regex.source).toContain('default');
+    expect(scope.rules[0]?.regex.source).toContain('default');
   });
 
   it('rejects the pre-YAML map shape for rules', async () => {
@@ -318,6 +501,7 @@ describe('loadConfig — YAML wire', () => {
       [
         'files:',
         '  tsconfig.json:',
+        '    default: {}',
         '    rules:',
         '      - pattern: apps/x',
         '        value: {}',
@@ -334,9 +518,13 @@ describe('loadConfig — YAML wire', () => {
     await putFile(
       root,
       'config-loom.yaml',
-      ['files:', '  tsconfig.json:', '    rules:', '      - default'].join(
-        '\n',
-      ),
+      [
+        'files:',
+        '  tsconfig.json:',
+        '    default: {}',
+        '    rules:',
+        '      - default',
+      ].join('\n'),
     );
     await expect(loadConfig(root)).rejects.toThrow(
       /must be an object with a "pattern" prop/,
@@ -365,7 +553,7 @@ describe('loadConfig — template files', () => {
     const { config } = await loadConfig(root);
     const entry = config.files['eslint.config.mjs'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.defaultValue).toBe(
+    expect(entry.scopes[0]?.defaultValue).toBe(
       "import base from '@repo/eslint';\nexport default base;\n",
     );
   });
@@ -387,7 +575,7 @@ describe('loadConfig — template files', () => {
     const { config } = await loadConfig(root);
     const entry = config.files['tsconfig.json'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.defaultValue).toEqual({
+    expect(entry.scopes[0]?.defaultValue).toEqual({
       compilerOptions: { strict: true },
     });
   });
@@ -411,21 +599,19 @@ describe('loadConfig — template files', () => {
     const { config } = await loadConfig(root);
     const entry = config.files['eslint.config.mjs'];
     if (!entry) throw new Error('missing entry');
-    expect(entry.rules[0]?.value).toBe('export default 1;\n');
+    expect(entry.scopes[0]?.rules[0]?.value).toBe('export default 1;\n');
   });
 
-  it('template: null is the same as a null value', async () => {
+  it('rejects template: null (values must have content)', async () => {
     const root = await makeTempDir();
     await putFile(
       root,
       'config-loom.yaml',
       ['files:', '  tsconfig.json:', '    template: null'].join('\n'),
     );
-    const { config } = await loadConfig(root);
-    const entry = config.files['tsconfig.json'];
-    if (!entry) throw new Error('missing entry');
-    expect(entry.hasDefault).toBe(true);
-    expect(entry.defaultValue).toBeNull();
+    await expect(loadConfig(root)).rejects.toThrow(
+      /"template" must be a repo-relative path string/,
+    );
   });
 
   it('rejects template/default conflicts and missing files', async () => {
