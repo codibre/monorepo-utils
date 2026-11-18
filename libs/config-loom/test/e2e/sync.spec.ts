@@ -366,3 +366,66 @@ describe('checkAll', () => {
     ]);
   });
 });
+
+describe('syncAll yaml format', () => {
+  const YAML_CONFIG: LoomConfigInput = {
+    files: {
+      'nest-cli.yml': {
+        default:
+          'collection: "@nestjs/schematics"\nmonorepo: true\nsourceRoot: src\n',
+        rules: [
+          {
+            pattern: 'apps/.*-legacy',
+            // YAML text, like json uses JSON text: the managed document
+            // never mixes with loom properties. null removes an inherited key.
+            value: 'sourceRoot: ~\ncompilerOptions:\n  deleteOutDir: true\n',
+          },
+        ],
+      },
+    },
+  };
+
+  it('renders canonical YAML and folds reformatting as no drift', async () => {
+    const root = await makeRepo();
+    const config = compileConfig(YAML_CONFIG, 'test');
+    const result = await syncAll(config, root, { runner: fakePnpmRunner });
+    expect(result.created).toBe(4);
+
+    const plain = await getRel(root, 'libs/math/nest-cli.yml');
+    expect(plain).toBe(
+      'collection: "@nestjs/schematics"\nmonorepo: true\nsourceRoot: src\n',
+    );
+
+    // A repo's own yaml-formatter pass (indent, quotes, comments, key
+    // order) must not count as drift...
+    await putFile(
+      root,
+      'libs/math/nest-cli.yml',
+      '# nest!\nsourceRoot:  "src"\ncollection: \'@nestjs/schematics\'\nmonorepo: true\n',
+    );
+    const afterReformat = await checkAll(config, root, {
+      runner: fakePnpmRunner,
+    });
+    expect(afterReformat.ok).toBe(true);
+
+    // ...but a real value change does.
+    await putFile(
+      root,
+      'libs/math/nest-cli.yml',
+      'collection: "@nestjs/schematics"\nmonorepo: false\nsourceRoot: src\n',
+    );
+    const afterEdit = await checkAll(config, root, { runner: fakePnpmRunner });
+    expect(afterEdit.ok).toBe(false);
+    expect(afterEdit.drift.map((i) => i.workspace)).toEqual(['libs/math']);
+  });
+
+  it('deep-merges rule values and deletes nulls', async () => {
+    const root = await makeRepo();
+    const config = compileConfig(YAML_CONFIG, 'test');
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    const legacy = await getRel(root, 'apps/my-legacy/nest-cli.yml');
+    expect(legacy).toBe(
+      'collection: "@nestjs/schematics"\nmonorepo: true\ncompilerOptions:\n  deleteOutDir: true\n',
+    );
+  });
+});

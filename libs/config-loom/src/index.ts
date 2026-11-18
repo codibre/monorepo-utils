@@ -53,3 +53,8 @@ export {
 export { canonicalJson, deepEqual, escapeRegExp, normalizeText } from './util';
 export { parseJsonc } from './jsonc';
 export { assertTypeScript, tsEquivalent, tsSignature } from './tsformat';
+export {
+  parseYamlDocument,
+  yamlCanonicalText,
+  yamlEquivalent,
+} from './yamlformat';
