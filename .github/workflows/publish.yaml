@@ -9,6 +9,10 @@ on:
         description: 'Exercise everything without publishing, committing or merging'
         type: boolean
         default: false
+      version:
+        description: 'Exact version to release (empty = conventional bump)'
+        type: string
+        default: ''
 
 # Only the most recently merged change should publish (issue #17).
 # Runs are SERIALIZED — cancel-in-progress stays false so a run that already
@@ -92,14 +96,19 @@ jobs:
       - name: Get OIDC Token
         id: oidc
         run: |
-          OIDC_TOKEN=$(curl -sL "${ACTIONS_ID_TOKEN_REQUEST_URL}?audience=https://registry.npmjs.org" \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN}" | jq -r '.value')
+          OIDC_TOKEN=$(curl -sSL --fail-with-body "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://registry.npmjs.org" \
+            -H "Authorization: Bearer ${ACTI...KEN}" | jq -r '.value')
+          if [ -z "$OIDC_TOKEN" ] || [ "$OIDC_TOKEN" = 'null' ]; then
+            echo '::error::Could not mint an OIDC token for npm provenance (see curl output above). Check Actions general permissions: "Can GitHub Actions mint an id-token".'
+            exit 1
+          fi
           echo "oidc-token=${OIDC_TOKEN}" >> $GITHUB_OUTPUT
 
       - name: Publish libraries sequentially
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.oidc-token }}
           DRY_RUN: ${{ inputs.dry_run }}
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
@@ -133,6 +142,14 @@ jobs:
             DRY_FLAG='--dry-run'
           fi
 
+          # npm burns a version slot even when a staged publish is rolled
+          # back, so 0.9.0 can never be published; a dispatch can pin the
+          # next number explicitly (e.g. version=0.9.1).
+          VERSION_ARG=''
+          if [ -n "$MANUAL_VERSION" ]; then
+            VERSION_ARG="$MANUAL_VERSION"
+          fi
+
           for entry in $PACKAGES; do
             IFS='|' read -r pkg_name lib_path <<< "$entry"
             pkg_dir=$(realpath "./${lib_path}")
@@ -149,7 +166,7 @@ jobs:
             # The old `|| true` + regex guess turned real publish failures into
             # a green "Successfully published" — failures now fail the job.
             RC=0
-            OUTPUT=$(cd "$pkg_dir" && release-it --ci --git.push=false ${DRY_FLAG} 2>&1) || RC=$?
+            OUTPUT=$(cd "$pkg_dir" && release-it ${VERSION_ARG} --ci --git.push=false ${DRY_FLAG} 2>&1) || RC=$?
             echo "$OUTPUT"
             if [ "$RC" -ne 0 ]; then
               echo "::error::${pkg_name}: release-it failed (exit ${RC}). Nothing was merged; check the output above before re-running."
