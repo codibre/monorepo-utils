@@ -647,8 +647,8 @@ describe('init auto-templating (issue #13)', () => {
       files: ['NOTICE.txt'],
     });
     expect(result.plan.templates.map((t) => t.path).sort()).toEqual([
+      '.config-loom/NOTICE.txt/c.txt',
       '.config-loom/NOTICE.txt/default.txt',
-      '.config-loom/NOTICE.txt/rule-1.txt',
     ]);
     expect(
       await readFile(
@@ -658,7 +658,7 @@ describe('init auto-templating (issue #13)', () => {
     ).toBe(big);
     const written = await readFile(result.configPath, 'utf8');
     expect(written).toContain('template: .config-loom/NOTICE.txt/default.txt');
-    expect(written).toContain('template: .config-loom/NOTICE.txt/rule-1.txt');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/c.txt');
     expect(written).not.toContain('notice line 0');
     // Round trip: sync regenerated every file byte-identically from the
     // templates, and the variant rule still reaches apps/c.
@@ -668,6 +668,47 @@ describe('init auto-templating (issue #13)', () => {
     expect(
       await readFile(path.join(root, 'apps/c/NOTICE.txt'), 'utf8'),
     ).toContain('NOTICE TEN differs');
+  });
+
+  it('names rule templates after simple rule patterns', async () => {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    const big = (marker: string): string =>
+      Array.from({ length: 45 }, (_, i) => `${marker} line ${i}`).join('\n') +
+      '\n';
+    for (const dir of ['base1', 'base2', 'base3', 'base4']) {
+      await createWorkspace(root, `apps/${dir}`, { 'NOTICE.txt': 'small\n' });
+    }
+    for (const dir of ['mq-one', 'mq-two']) {
+      await createWorkspace(root, `apps/${dir}`, { 'NOTICE.txt': big('mq') });
+    }
+    for (const dir of ['pay-sdk', 'search-sdk']) {
+      await createWorkspace(root, `apps/${dir}`, { 'NOTICE.txt': big('sdk') });
+    }
+    await createWorkspace(root, 'apps/solo', { 'NOTICE.txt': big('solo') });
+
+    const result = await initRepo(root, {
+      runner: fakePnpmRunner,
+      yes: true,
+      noWire: true,
+      files: ['NOTICE.txt'],
+    });
+    // Literal, prefix-family and suffix-family rule keys all yield readable
+    // template names instead of rule-N.
+    const names = result.plan.templates.map((t) => path.basename(t.path));
+    expect(names.sort()).toEqual(['mq.txt', 'sdk.txt', 'solo.txt']);
+    const written = await readFile(result.configPath, 'utf8');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/mq.txt');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/sdk.txt');
+    expect(written).toContain('template: .config-loom/NOTICE.txt/solo.txt');
+    const { config } = await loadConfig(root);
+    const check = await checkAll(config, root, { runner: fakePnpmRunner });
+    expect(check.ok).toBe(true);
   });
 
   it('templateThreshold 0 keeps everything inline', async () => {

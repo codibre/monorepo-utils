@@ -320,10 +320,14 @@ their own): repo-relative, must stay inside the repo, and — like the config
 itself — it is a turbo task `input`, so editing it re-runs the generator.
 `init` does this for you: any rendered value longer than
 `--template-threshold` lines (default 40) is written to
-`.config-loom/<file>/default<ext>` — or `rule-N<ext>` for rules — and
-referenced by `template:`. Those files are **inputs**: commit them together
-with `config-loom.yaml`. Pass `--template-threshold 0` to keep everything
-inline.
+`.config-loom/<file>/default<ext>` — for rules, the file is named after the
+rule's pattern when it is simple (a literal path `libs/core` → `core`, a
+naming family `packages/mq-.*` → `mq`, `.*-sdk` → `sdk`, an alternation
+`libs/(?:mq-one|mq-two)` → `mq`, a directory family `apps/.*` → `apps`),
+falling back to `rule-N<ext>` for regex shapes a stem could misrepresent —
+and referenced by `template:`. Those files are **inputs**: commit them
+together with `config-loom.yaml`. Pass `--template-threshold 0` to keep
+everything inline.
 
 Rule semantics:
 
