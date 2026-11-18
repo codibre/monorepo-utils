@@ -16,6 +16,7 @@ import { synthesizeIgnoreList } from './ignore';
 import { parseJsonc } from './jsonc';
 import { syncAll } from './sync';
 import { tsSignature } from './tsformat';
+import { parseYamlDocument, yamlCanonicalText } from './yamlformat';
 import {
   canonicalJson,
   escapeRegExp,
@@ -833,6 +834,25 @@ export async function buildPlan(
           unmanaged.push({ workspace, file, reason: (e as Error).message });
           continue;
         }
+      } else if (format === 'yaml') {
+        // Cluster YAML files by their PARSED document: indentation,
+        // quoting, comments and key order fold; list order and scalar
+        // types stay data.
+        try {
+          parsed = parseYamlDocument(raw, path.join(workspace, file));
+        } catch (e) {
+          unmanaged.push({ workspace, file, reason: (e as Error).message });
+          continue;
+        }
+        if (!isPlainObject(parsed)) {
+          unmanaged.push({
+            workspace,
+            file,
+            reason: `${file} top-level YAML must be a mapping (object)`,
+          });
+          continue;
+        }
+        normalized = canonicalJson(parsed);
       } else {
         try {
           parsed = parseJsonc(raw, path.join(workspace, file));
@@ -1085,8 +1105,9 @@ export function serializeConfig(config: LoomConfigInput): string {
     '# `pattern` (same regex syntax) and a `value`. Order matters: rules',
     '# merge over default and each other, top to bottom, later rules win.',
     '# A null INSIDE a rule value removes an inherited key (JSON Merge',
-    '# Patch, RFC 7386). For json/jsonc, values are written as plain',
-    '# JSON/JSONC text block scalars — JSON stays readable as JSON. Prefer',
+    '# Patch, RFC 7386). Structured values are written as text block',
+    '# scalars (JSON/JSONC text, or canonical YAML text for yaml files) —',
+    '# the managed document never mixes with loom properties. Prefer',
     '# families (`libs/.*`, `.*-rs`) over name lists, so new projects',
     '# joining a shape need no edit here. Instead of an inline value,',
     '# `template: <repo-relative path>` pulls content from a file',
@@ -1098,8 +1119,15 @@ export function serializeConfig(config: LoomConfigInput): string {
   const wireValue = (
     value: JsonValue | string,
     format: FileFormat,
-  ): JsonValue | string =>
-    !isTextLike(format) && isPlainObject(value) ? jsonText(value) : value;
+  ): JsonValue | string => {
+    if (!isPlainObject(value)) {
+      return value;
+    }
+    // Structured content is always written as TEXT block scalars — JSON
+    // text for json/jsonc, canonical YAML text for yaml — so a managed
+    // document never mixes with the loom's own properties.
+    return format === 'yaml' ? yamlCanonicalText(value) : jsonText(value);
+  };
   const files: Record<string, unknown> = {};
   for (const [name, spec] of Object.entries(config.files)) {
     const target = spec.filename ?? name;
