@@ -105,11 +105,120 @@ function lineCount(text: string): number {
   return text.replace(/\n+$/, '').split('\n').length;
 }
 
+/** Characters a derived template stem may contain on every filesystem. */
+const SAFE_TEMPLATE_STEM = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Longest leading token run (`[-_]`-delimited) shared by every branch, so
+ * `mq-one`/`mq-two` share `mq` while `base`/`base2` share nothing (the run
+ * must end on a boundary, never mid-token). Undefined when no usable
+ * identity exists.
+ */
+function sharedLeadingToken(branches: string[]): string | undefined {
+  const [first, ...rest] = branches;
+  if (first === undefined) {
+    return undefined;
+  }
+  const tokens = first.split(/([-_])/);
+  let sharedEnd = -1;
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const token = tokens[i];
+    const sep = tokens[i + 1];
+    if (token === undefined || token === '' || sep === undefined) {
+      break;
+    }
+    if (!rest.every((branch) => branch.startsWith(`${token}${sep}`))) {
+      break;
+    }
+    sharedEnd = i;
+  }
+  if (sharedEnd < 0) {
+    return undefined;
+  }
+  const joined = tokens.slice(0, sharedEnd + 1).join('');
+  return joined === '' ? undefined : joined;
+}
+
+/**
+ * Human-readable template file stem derived from the rule's pattern when the
+ * pattern is simple enough, else undefined (caller keeps `rule-<n>`):
+ *
+ * - a literal path (`libs/core`) → its last segment (`core`);
+ * - a naming family whose wildcard sits on a token boundary
+ *   (`packages/mq-.*` → `mq`, `.*-sdk` → `sdk`);
+ * - an alternation group whose branches share a leading token
+ *   (`libs/(?:mq-one|mq-two)` → `mq`);
+ * - a plain directory family (`apps/.*`) → the parent directory (`apps`).
+ *
+ * Anchors are stripped before inspecting. Guards (`(?!…)`), alternations
+ * without a shared leading token, boundary-less wildcards (`foo.*`) and any
+ * other regex syntax are not "simple" — a derived name there could
+ * misrepresent the scope.
+ */
+function templateStemFromPattern(pattern: string): string | undefined {
+  let p = pattern;
+  if (p.startsWith('^')) p = p.slice(1);
+  if (p.endsWith('$')) p = p.slice(0, -1);
+  if (p === '' || p === '.*') {
+    return undefined;
+  }
+  const segments = p.split('/');
+  let token: string | undefined;
+  let wildcards = 0;
+  for (const segment of segments) {
+    if (segment === '' || segment === '.' || segment === '..') {
+      return undefined;
+    }
+    if (segment.includes('(')) {
+      const group = /^\(\?:([A-Za-z0-9._-]+(?:\|[A-Za-z0-9._-]+)*)\)$/.exec(
+        segment,
+      );
+      if (group === null) {
+        return undefined;
+      }
+      const branches = group[1]?.split('|');
+      if (branches === undefined) {
+        return undefined;
+      }
+      token = sharedLeadingToken(branches);
+      if (token === undefined) {
+        return undefined;
+      }
+    } else if (!/^[A-Za-z0-9._*-]+$/.test(segment)) {
+      return undefined;
+    } else if (segment === '.*') {
+      wildcards += 1;
+    } else if (segment.includes('*')) {
+      const prefix = /^([A-Za-z0-9._-]+[-_])\.\*$/.exec(segment);
+      const suffix = /^\.\*[-_]([A-Za-z0-9._-]+)$/.exec(segment);
+      if (prefix === null && suffix === null) {
+        return undefined;
+      }
+      wildcards += 1;
+      token = (prefix?.[1] ?? suffix?.[1] ?? '').replace(/[-_]$/, '');
+    }
+  }
+  if (wildcards > 1) {
+    return undefined;
+  }
+  const name =
+    token ??
+    (wildcards === 1
+      ? // plain `dir/.*` family: the identity is the directory itself
+        segments[segments.length - 2]
+      : segments[segments.length - 1]);
+  return name !== undefined && SAFE_TEMPLATE_STEM.test(name) ? name : undefined;
+}
+
 /**
  * Big values move out of the loom: any rendered value longer than
  * `threshold` lines becomes a file under `.config-loom/<file>/` referenced
- * by `template:` — entry defaults and rule values alike. The spec is
- * rewritten in place; the returned contents are for init to write to disk.
+ * by `template:` — entry defaults and rule values alike. Rule templates are
+ * named after the rule's pattern when it is simple enough
+ * ({@link templateStemFromPattern}), falling back to `rule-<n>`; names are
+ * unique per entry (colliders gain a `-2`, `-3`, … suffix, and `default` is
+ * reserved for the entry's own default template). The spec is rewritten in
+ * place; the returned contents are for init to write to disk.
  */
 function applyAutoTemplates(
   file: string,
@@ -122,9 +231,18 @@ function applyAutoTemplates(
   }
   const templates: TemplateFile[] = [];
   const ext = path.posix.extname(file);
+  const used = new Set<string>(['default']);
+  const unique = (base: string): string => {
+    let name = base;
+    for (let n = 2; used.has(name); n += 1) {
+      name = `${base}-${n}`;
+    }
+    used.add(name);
+    return name;
+  };
   const move = (
     value: JsonValue | string | undefined,
-    suffix: string,
+    stem: string | (() => string),
   ): string | undefined => {
     if (value === undefined || value === null) {
       return undefined;
@@ -134,6 +252,7 @@ function applyAutoTemplates(
     if (lineCount(text) <= threshold) {
       return undefined;
     }
+    const suffix = typeof stem === 'string' ? stem : unique(stem());
     const rel = path.posix.join(TEMPLATE_DIR, file, `${suffix}${ext}`);
     templates.push({ path: rel, content: text });
     return rel;
@@ -144,7 +263,10 @@ function applyAutoTemplates(
     spec.template = defaultRel;
   }
   spec.rules?.forEach((rule, index) => {
-    const ruleRel = move(rule.value, `rule-${index + 1}`);
+    const ruleRel = move(
+      rule.value,
+      () => templateStemFromPattern(rule.pattern) ?? `rule-${index + 1}`,
+    );
     if (ruleRel !== undefined) {
       delete rule.value;
       rule.template = ruleRel;
