@@ -103,13 +103,14 @@ without a compact cover is scoped with `include`). Use
 `--files tsconfig.json,eslint.config.mjs` to restrict the scope.
 
 tsconfig deltas are computed with TypeScript semantics, not byte equality:
-`./dist` and `dist` address the same directory, and a bare `src` includes
-exactly what `src/**/*` includes. A rule that differs from `default` only in
-such spellings is pruned down to its real differences — e.g. a library whose
-compiler options match the default but simply has no `exclude` ends up as
-a `libs/delta` rule carrying the JSON text `{ "exclude": null }` (a null
-_inside_ a value removes the inherited key), and a library that is merely
-spelled differently joins the `default` outright.
+`./dist` and `dist` address the same directory, a bare `src` includes exactly
+what `src/**/*` includes, and `include`/`exclude`/`files` are **sets** — the
+same globs in another order (or with a duplicate) compile the same files. A
+rule that differs from `default` only in such spellings is pruned down to its
+real differences — e.g. a library whose compiler options match the default
+but simply has no `exclude` ends up as a `libs/delta` rule carrying the JSON
+text `{ "exclude": null }`, and a library that is merely spelled differently
+joins the `default` outright.
 
 ### 3. Wire it up — one line (init does it for you)
 

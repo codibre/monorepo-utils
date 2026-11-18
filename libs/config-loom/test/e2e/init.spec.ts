@@ -447,6 +447,62 @@ describe('loom init tsconfig intelligence (issue #5)', () => {
       true,
     );
   });
+
+  it('treats reordered include/exclude lists as the default', async () => {
+    const root = await makeTempDir();
+    await putFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'libs/*'\n");
+    await putFile(
+      root,
+      'package.json',
+      JSON.stringify({ name: 'root', private: true }),
+    );
+    await git(root, 'init', '-q');
+    const base =
+      JSON.stringify(
+        {
+          compilerOptions: { outDir: 'dist' },
+          include: ['src', 'test'],
+          exclude: ['node_modules', 'dist'],
+        },
+        null,
+        2,
+      ) + '\n';
+    // same blobs, different order: TypeScript compiles the exact same set
+    const shuffled =
+      JSON.stringify(
+        {
+          compilerOptions: { outDir: 'dist' },
+          include: ['test', 'src'],
+          exclude: ['dist', 'node_modules'],
+        },
+        null,
+        2,
+      ) + '\n';
+    await createWorkspace(root, 'libs/alpha', { 'tsconfig.json': base });
+    await createWorkspace(root, 'libs/beta', { 'tsconfig.json': base });
+    await createWorkspace(root, 'libs/shuffle', { 'tsconfig.json': shuffled });
+    await git(root, 'add', '-A');
+    await git(root, 'commit', '-qm', 'feat: scatter configs');
+
+    const plan = await buildPlan(root, {
+      runner: fakePnpmRunner,
+      files: ['tsconfig.json'],
+    });
+    const spec = plan.config.files['tsconfig.json'];
+    if (!spec) throw new Error('missing entry');
+    // the permutation is not information: no rule at all
+    expect(spec.rules ?? []).toEqual([]);
+    const config = compileConfig(plan.config, 'test');
+    await syncAll(config, root, { runner: fakePnpmRunner });
+    // the shuffled file normalizes to the default ordering, and everything
+    // is stable from then on
+    expect(
+      parseJsonc(await getRel(root, 'libs/shuffle/tsconfig.json'), 'x'),
+    ).toEqual(JSON.parse(base));
+    expect((await checkAll(config, root, { runner: fakePnpmRunner })).ok).toBe(
+      true,
+    );
+  });
 });
 
 describe('loom init YAML wire (pattern prop)', () => {
