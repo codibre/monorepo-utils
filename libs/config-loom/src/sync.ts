@@ -1,6 +1,7 @@
 import { renderCandidates, renderFile, scopeFor } from './render';
+import { isStructured } from './util';
 import { tsEquivalent } from './tsformat';
-import { isJsonFormat } from './util';
+import { yamlEquivalent } from './yamlformat';
 import type { WorkspaceRunner } from './workspaces';
 import { discoverWorkspaces } from './workspaces';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
@@ -47,8 +48,9 @@ export async function syncAll(
         // No entry scope covers this workspace (or its scope excluded it).
         // Remove a file WE generated earlier — never one we cannot prove
         // we wrote. Authorship is proven by any scope's banner prefix, or
-        // (json/jsonc only) by byte-equality with a canonical render this
-        // loom could have produced: canonical JSON is distinctive enough,
+        // (structured formats only) by byte-equality with a canonical
+        // render this loom could have produced: canonical JSON/YAML is
+        // distinctive enough,
         // plain text and TypeScript source are not.
         const current = await readOrNull(target);
         const provable =
@@ -57,7 +59,7 @@ export async function syncAll(
             (scope) =>
               scope.banner !== false && current.startsWith(scope.banner),
           ) ||
-            (entry.scopes.some((scope) => isJsonFormat(scope.format)) &&
+            (entry.scopes.some((scope) => isStructured(scope.format)) &&
               renderCandidates(entry).includes(current)));
         if (provable) {
           if (!options.dryRun) {
@@ -76,19 +78,22 @@ export async function syncAll(
         continue;
       }
       const current = await readOrNull(target);
+      const scope = scopeFor(entry, workspace);
       let status: ItemStatus;
       if (current === null) {
         status = 'created';
       } else if (current === content) {
         status = 'unchanged';
       } else if (
-        scopeFor(entry, workspace)?.format === 'ts' &&
-        tsEquivalent(current, content, entry.file)
+        (scope?.format === 'ts' &&
+          tsEquivalent(current, content, entry.file)) ||
+        (scope?.format === 'yaml' &&
+          yamlEquivalent(current, content, entry.file))
       ) {
-        // A ts file is up to date when it is the same CODE — a prettier
-        // pass or hand reformat must not count as drift, and rewriting it
-        // would only start a formatting tug-of-war with the repo's own
-        // formatter.
+        // A ts file is up to date when it is the same CODE, a yaml file
+        // when it is the same DOCUMENT — a formatter pass or hand
+        // reformat must not count as drift, and rewriting would only
+        // start a formatting tug-of-war with the repo's own tooling.
         status = 'unchanged';
       } else {
         status = 'updated';
