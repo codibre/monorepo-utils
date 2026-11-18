@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Exercise everything without publishing, committing or merging'
+        type: boolean
+        default: false
 
 # Only the most recently merged change should publish (issue #17).
 # Runs are SERIALIZED — cancel-in-progress stays false so a run that already
@@ -19,6 +24,7 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  pull-requests: write
 
 jobs:
   decide:
@@ -60,7 +66,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global push.followTags true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -94,11 +99,13 @@ jobs:
       - name: Publish libraries sequentially
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.oidc-token }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
 
           PUBLISHED=()
           SKIPPED=()
+          FAILED=()
 
           # Get list of non-private packages in libs/
           PACKAGES=$(for lib in libs/*/; do
@@ -121,6 +128,11 @@ jobs:
             echo "always-auth=true" >> ~/.npmrc
           }
 
+          DRY_FLAG=''
+          if [ "$DRY_RUN" = 'true' ]; then
+            DRY_FLAG='--dry-run'
+          fi
+
           for entry in $PACKAGES; do
             IFS='|' read -r pkg_name lib_path <<< "$entry"
             pkg_dir=$(realpath "./${lib_path}")
@@ -128,17 +140,53 @@ jobs:
             echo ">>> Checking ${pkg_name} from ${pkg_dir}"
 
             configure_npmrc "$OIDC_TOKEN"
+            OLD_VERSION=$(node -p "require('${pkg_dir}/package.json').version")
 
-            # Capture release-it output to detect if it actually published
-            OUTPUT=$(cd "$pkg_dir" && release-it --ci 2>&1 || true)
+            # main is ruleset-protected (PRs only), so release-it must NOT push:
+            # it bumps, writes CHANGELOG.md, runs the npm publish hook, commits
+            # and tags LOCALLY; commit+tag then reach main through a release PR
+            # below. The PR title carries [skip ci] so merging triggers no run.
+            # The old `|| true` + regex guess turned real publish failures into
+            # a green "Successfully published" — failures now fail the job.
+            RC=0
+            OUTPUT=$(cd "$pkg_dir" && release-it --ci --git.push=false ${DRY_FLAG} 2>&1) || RC=$?
             echo "$OUTPUT"
-
-            # Check if the output contains a version bump (not just SKIP)
-            if echo "$OUTPUT" | grep -qE "release [0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+\.[0-9]+\.\.\.[0-9]+\.[0-9]+\.[0-9]+" && ! echo "$OUTPUT" | grep -q "No commits found"; then
-              PUBLISHED+=("$pkg_name")
-            else
-              SKIPPED+=("$pkg_name")
+            if [ "$RC" -ne 0 ]; then
+              echo "::error::${pkg_name}: release-it failed (exit ${RC}). Nothing was merged; check the output above before re-running."
+              FAILED+=("$pkg_name")
+              continue
             fi
+
+            NEW_VERSION=$(node -p "require('${pkg_dir}/package.json').version")
+            if [ "$NEW_VERSION" = "$OLD_VERSION" ]; then
+              SKIPPED+=("$pkg_name")
+              continue
+            fi
+
+            if [ "$DRY_RUN" = 'true' ]; then
+              echo "Dry run: would push release/${pkg_name}-v${NEW_VERSION} + tag ${pkg_name}@${NEW_VERSION} and merge its PR."
+              PUBLISHED+=("$pkg_name ${NEW_VERSION} (dry run)")
+              continue
+            fi
+
+            BRANCH="release/${pkg_name}-v${NEW_VERSION}"
+            TAG="${pkg_name}@${NEW_VERSION}"
+            if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+              echo "::error::${TAG} already exists on the remote but ${pkg_name} was bumped again — investigate before re-running."
+              FAILED+=("$pkg_name")
+              continue
+            fi
+
+            # Branches other than main are outside the ruleset, and tags are
+            # unrestricted; the release PR is what lands the commit on main.
+            git push origin "HEAD:refs/heads/${BRANCH}" "refs/tags/${TAG}"
+
+            PR_URL=$(gh pr create --base main --head "$BRANCH" \
+              --title "chore(${pkg_name}): release v${NEW_VERSION} [skip ci]" \
+              --body "Automated release from the publish workflow (run commit \`${GITHUB_SHA}\`). The version was published to npm by this run; merging lands the version bump and changelog on main.")
+            PR_NUM=${PR_URL##*/}
+            gh pr merge "$PR_NUM" --merge
+            PUBLISHED+=("$pkg_name ${NEW_VERSION}")
           done
 
           echo ""
@@ -150,6 +198,11 @@ jobs:
           if [ ${#SKIPPED[@]} -gt 0 ]; then
             echo "Skipped (no new commits):"
             for pkg in "${SKIPPED[@]}"; do echo "  ⏭️  $pkg"; done
+          fi
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo "FAILED:"
+            for pkg in "${FAILED[@]}"; do echo "  ✖ $pkg"; done
+            exit 1
           fi
           if [ ${#PUBLISHED[@]} -eq 0 ] && [ ${#SKIPPED[@]} -gt 0 ]; then
             echo "No libraries needed publishing this run."
