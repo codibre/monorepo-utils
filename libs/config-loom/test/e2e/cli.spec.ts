@@ -66,6 +66,41 @@ describe('cli main()', () => {
     );
   });
 
+  it('unknown option exits 2', async () => {
+    expect(await main(['sync', '--wat'])).toBe(2);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unknown option '--wat'"),
+    );
+  });
+
+  it('--help works per command and shows only that command options', async () => {
+    expect(await main(['init', '--help'])).toBe(0);
+    const initHelp = logSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('\n');
+    expect(initHelp).toContain('Usage: config-loom init');
+    expect(initHelp).toContain('--files <a,b,...>');
+    expect(initHelp).toContain('--no-wire');
+
+    logSpy.mockClear();
+    expect(await main(['sync', '--help'])).toBe(0);
+    const syncHelp = logSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('\n');
+    expect(syncHelp).toContain('--dry-run');
+    expect(syncHelp).not.toContain('--files');
+
+    logSpy.mockClear();
+    expect(await main(['--help'])).toBe(0);
+    const top = logSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('\n');
+    for (const cmd of ['sync', 'check', 'wire', 'init']) {
+      expect(top).toContain(cmd);
+    }
+    expect(top).toContain('postinstall');
+  });
+
   it('sync then check exit 0', async () => {
     const root = await makeRepoWithLoom();
     expect(
