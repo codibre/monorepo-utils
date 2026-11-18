@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/codibre/monorepo-utils/compare/config-loom%400.8.0...config-loom%400.9.1) (2026-11-18)
+
+### Features
+
+* **config-loom:** init moves big values to .config-loom templates ([ca7fc86](https://github.com/codibre/monorepo-utils/commit/ca7fc86ed65559e88dae33f3619fd40fd7efe01c)), closes [#13](https://github.com/codibre/monorepo-utils/issues/13)
+* **config-loom:** per-command --help via commander ([bdcb90d](https://github.com/codibre/monorepo-utils/commit/bdcb90db2fed948de9a44c0d1c2dedf22c1ee975)), closes [#15](https://github.com/codibre/monorepo-utils/issues/15)
+* **config-loom:** yaml format comparing documents by parsed content ([ffdd5f6](https://github.com/codibre/monorepo-utils/commit/ffdd5f64fc4e166d5f92393ac6f9f7cbbf9d1a95)), closes [#12](https://github.com/codibre/monorepo-utils/issues/12)
+
 ## [0.5.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.4.0...config-loom%400.5.0) (2026-11-17)
 
 ### Features
