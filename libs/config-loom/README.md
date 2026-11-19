@@ -449,11 +449,15 @@ config-loom add .release-it.js .release-it.json   # known templates, every works
 config-loom add .eslintrc.json --template templates/eslint.json --include 'apps/.*'
 ```
 
-Content sources, in order: `--template <repo-relative path>`, then the
-built-in **known templates** (`KNOWN_TEMPLATES`: `.release-it.js` and
-`.release-it.json`, each wiring one root `.release-it.base.js`). Anything
-else errors with hints. Already-managed files are refused — edit the loom
-or use `refresh`.
+Content sources, in order: `--template <repo-relative path>`; the
+**current on-disk instances**, clustered with init's exact machinery — if
+workspaces already carry the file (even in divergent flavors like a cargo
+release hook), every variant is *adopted* as default + rules and nothing
+is rewritten; the source is reported as `disk`. Only when no workspace
+has the file does the built-in **known templates** registry
+(`KNOWN_TEMPLATES`: `.release-it.js` and `.release-it.json`, each wiring
+one root `.release-it.base.js`) seed it. Anything else errors with hints.
+Already-managed files are refused — edit the loom or use `refresh`.
 
 Known templates may contain the `{{root}}` token: at sync time it expands
 to one `../` per workspace path segment, so `apps/api` renders

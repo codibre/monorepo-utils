@@ -324,8 +324,10 @@ export async function main(
       .command('add <filenames...>')
       .description(
         'add managed files to the loom and generate them in every in-scope ' +
-          'workspace: content from --template or the built-in known templates ' +
-          '(.release-it.js, .release-it.json with {{root}}); keeps the init ' +
+          'workspace: existing on-disk files are adopted as-is (clustered ' +
+          'into default + rules); when none exists, content comes from ' +
+          '--template or the built-in known templates (.release-it.js, ' +
+          '.release-it.json with {{root}}); keeps the init ' +
           'contract (generated files leave git, the .gitignore block is ' +
           're-synthesized from all managed entries)',
       )

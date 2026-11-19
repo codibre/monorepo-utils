@@ -12,9 +12,10 @@ import {
   updateGitignoreBlock,
 } from './git';
 import { synthesizeIgnoreList } from './ignore';
-import { serializeConfig } from './init';
+import { buildPlan, serializeConfig, synthesizePattern } from './init';
 import { KNOWN_TEMPLATES } from './registry';
 import { scopeFor } from './render';
+import { readOrNull } from './util';
 import { syncAll } from './sync';
 import { discoverWorkspaces, readWorkspaceGlobs } from './workspaces';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -46,7 +47,7 @@ export interface AddedEntry {
   /** The `files:` key of the added entry (the normalized filename). */
   entryName: string;
   /** Where the content came from. */
-  source: 'template' | 'known';
+  source: 'template' | 'disk' | 'known';
   /** The entry exactly as it was (or would be) written into the loom. */
   entry: FileSpecInput;
   /** Workspaces that received the file (statuses other than unchanged). */
@@ -96,12 +97,14 @@ function normalizeTarget(raw: string, label: string): string {
  * later `init --force` regenerates the identical block.
  *
  * Content source per filename: `--template` first (single-filename adds
- * only), then the built-in registry keyed by basename (see registry.ts);
- * an unknown name with no template is an error pointing at both
- * alternatives (and at `init --files` for files that already exist on disk
- * — discovery stays init's job). Added entries are plain loom entries
- * afterwards: scopes, rules and templates can be edited by hand, and new
- * workspaces inherit the files with zero loom edits.
+ * only), then the CURRENT on-disk instances clustered exactly as init
+ * would (so adopting files that already exist keeps every variant as a
+ * rule instead of overwriting them), then the built-in registry keyed by
+ * basename (see registry.ts) for files no workspace has yet. An unknown
+ * name that exists nowhere and has no template is an error pointing at
+ * both alternatives. Added entries are plain loom entries afterwards:
+ * scopes, rules and templates can be edited by hand, and new workspaces
+ * inherit the files with zero loom edits.
  */
 export async function addFiles(
   root: string,
@@ -157,6 +160,12 @@ export async function addFiles(
   }
 
   const added: AddedEntry[] = [];
+  const globs = await readWorkspaceGlobs(root);
+  const probeWorkspaces = await discoverWorkspaces(
+    root,
+    input.exclude ?? [],
+    options.runner,
+  );
   for (const target of targets) {
     let entry: FileSpecInput;
     let source: AddedEntry['source'];
@@ -164,17 +173,75 @@ export async function addFiles(
       entry = { format: defaultFormatFor(target), template: options.template };
       source = 'template';
     } else {
+      // Adopt whatever the repo already has: cluster the current on-disk
+      // instances so divergent files (a cargo hook, an older shim) survive
+      // as rules instead of being steamrolled by a template.
+      let present = false;
+      for (const workspace of probeWorkspaces) {
+        if ((await readOrNull(path.join(root, workspace, target))) !== null) {
+          present = true;
+          break;
+        }
+      }
+      const plan = present
+        ? await buildPlan(root, {
+            files: [target],
+            runner: options.runner,
+            globs,
+            templateThreshold: 0,
+          })
+        : undefined;
+      const derived = plan?.config.files[target];
       const base = target.split('/').pop() ?? target;
       const known = KNOWN_TEMPLATES[base];
-      if (known === undefined) {
+      const format = defaultFormatFor(target);
+      if (
+        derived !== undefined &&
+        known !== undefined &&
+        format !== 'json' &&
+        format !== 'yaml'
+      ) {
+        // Hybrid: the known template becomes the guarantee for EVERY
+        // in-scope workspace (including ones that never had the file —
+        // the lazy-structures failure mode), while each on-disk variant
+        // is preserved verbatim as a rule.
+        const rules = [...(derived.rules ?? [])];
+        const defaultCluster = plan?.clusters.find(
+          (cluster) => cluster.file === target && cluster.kind === 'default',
+        );
+        if (
+          defaultCluster !== undefined &&
+          defaultCluster.members.length > 0 &&
+          typeof derived.default === 'string' &&
+          derived.default !== known.content
+        ) {
+          rules.unshift({
+            pattern: synthesizePattern(
+              defaultCluster.members,
+              plan?.workspaces ?? [],
+              globs,
+            ),
+            value: derived.default,
+          });
+        }
+        entry = { ...derived, default: known.content, rules };
+        delete entry.include;
+        delete entry.exclude;
+        source = 'disk';
+      } else if (derived !== undefined) {
+        entry = derived;
+        source = 'disk';
+      } else if (known !== undefined) {
+        entry = { format: known.format, default: known.content };
+        source = 'known';
+      } else {
         throw new LoomError(
-          `no content source for "${target}": pass --template <repo-relative path>, ` +
-            `seed an on-disk file with 'config-loom init --files ${base} --force', ` +
-            `or choose a known template: ${Object.keys(KNOWN_TEMPLATES).join(', ')}`,
+          `no content source for "${target}": no workspace has it — pass ` +
+            '--template <repo-relative path>, seed an on-disk file with ' +
+            `'config-loom init --files ${base} --force', or choose a known ` +
+            `template: ${Object.keys(KNOWN_TEMPLATES).join(', ')}`,
         );
       }
-      entry = { format: known.format, default: known.content };
-      source = 'known';
     }
     if (options.include !== undefined && options.include.length > 0) {
       entry.include = [...options.include];
@@ -197,7 +264,6 @@ export async function addFiles(
     config.exclude,
     options.runner,
   );
-  const globs = await readWorkspaceGlobs(root);
   const gitRepo = await isGitRepo(root);
   const tracked = gitRepo ? await listTrackedFiles(root) : new Set<string>();
 

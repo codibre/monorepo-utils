@@ -203,6 +203,39 @@ describe('loom add', () => {
     expect(check.ok).toBe(true);
   });
 
+  it('adopts divergent on-disk instances as rules instead of overwriting', async () => {
+    const root = await baseRepo();
+    // a realistic split: most workspaces carry a plain shim, one has a
+    // custom cargo hook — add must CLUSTER, not steamroll
+    const plain = 'module.exports = { a: 1 };\n';
+    const hook =
+      "module.exports = { hooks: { 'before:init': ['cargo test'] } };\n";
+    for (const ws of ['apps/web', 'libs/math-application', 'tool']) {
+      await putFile(root, `${ws}/.release-it.js`, plain);
+    }
+    await putFile(root, 'apps/api/.release-it.js', hook);
+
+    const result = await addFiles(root, ['.release-it.js'], {
+      runner: fakePnpmRunner,
+    });
+    expect(result.added[0]?.source).toBe('disk');
+    // nothing was rewritten — both variants are already reproduced
+    expect(result.added[0]?.generated).toEqual([]);
+    expect(await getRel(root, 'apps/api/.release-it.js')).toBe(hook);
+    expect(await getRel(root, 'apps/web/.release-it.js')).toBe(plain);
+
+    const loom = await readLoom(root);
+    const entry = loom.files['.release-it.js'];
+    // hybrid: the known template is the all-workspace guarantee (token
+    // kept), every on-disk variant survived as a rule
+    expect(String(entry?.default)).toContain('{{root}}');
+    expect(JSON.stringify(entry?.rules)).toContain('cargo test');
+    expect(JSON.stringify(entry?.rules)).toContain('a: 1');
+    const { config } = await loadConfig(root);
+    const check = await checkAll(config, root, { runner: fakePnpmRunner });
+    expect(check.ok).toBe(true);
+  });
+
   it('dry run plans everything and writes nothing', async () => {
     const root = await baseRepo();
     const before = await getRel(root, 'config-loom.yaml');
