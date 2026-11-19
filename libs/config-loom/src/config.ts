@@ -608,6 +608,37 @@ export function collectTemplatePaths(input: unknown): string[] {
   return [...found].sort();
 }
 
+/**
+ * Locate the loom file: the explicit path (must exist) or the first
+ * default name at the repo root. Errors mirror loadConfig's message so
+ * every command reports the same "run init first" hint.
+ */
+export async function findConfigFile(
+  root: string,
+  explicit?: string,
+): Promise<string> {
+  if (explicit !== undefined) {
+    try {
+      await readFile(explicit, 'utf8');
+    } catch {
+      throw new LoomError(`no loom configuration at ${explicit}`);
+    }
+    return explicit;
+  }
+  const candidates = DEFAULT_CONFIG_FILENAMES.map((name) => `${root}/${name}`);
+  for (const candidate of candidates) {
+    try {
+      await readFile(candidate, 'utf8');
+      return candidate;
+    } catch {
+      // try the next default name
+    }
+  }
+  throw new LoomError(
+    `no loom configuration found (looked for: ${candidates.join(', ')}) — run 'config-loom init' first`,
+  );
+}
+
 /** Locate and load config-loom.yaml from the repo root. */
 export async function loadConfig(
   root: string,

@@ -400,6 +400,12 @@ config-loom <command> [options]
 
   init     Reverse-engineer config-loom.yaml from the configs scattered across
            workspaces; delete, gitignore and regenerate them.
+  add      Seed managed files that exist nowhere yet: config-loom add <file...>
+           Content comes from --template or from the built-in known templates
+           (.release-it.js, .release-it.json — see "Growing the loom").
+  refresh  Re-derive managed entries from the current workspace state: manual
+           configs (e.g. in a brand-new project) become rules — no hand
+           editing of the loom. Optionally restrict: config-loom refresh a,b.
   sync     Generate every managed file (creates/updates only what changed).
   check    Exit 1 if any managed file is missing or stale. Never writes.
   wire     (Re)apply the integration: postinstall in the root package.json,
@@ -408,6 +414,11 @@ config-loom <command> [options]
   --root <dir>       repository root (default cwd)
   --config <path>    config file path (default <root>/config-loom.yaml)
   --files a,b,...    [init] restrict to these file names
+  --template <path>  [add] repo-relative file supplying the content
+                     (single filename only)
+  --include <regex>  [add] restrict the new entry to matching workspaces
+                     (repeatable; patterns are fully anchored, e.g. 'apps/.*')
+  --exclude <regex>  [add] workspaces that must never receive the file
   --template-threshold <n>
                      [init] values over n lines move to .config-loom/
                      template files (default 40; 0 keeps everything inline)
@@ -421,6 +432,57 @@ config-loom <command> [options]
   -v, --version      print the version
 ```
 
+## Growing the loom: `add` and `refresh`
+
+`init` discovers what exists; these two commands *grow* and *heal*.
+
+### `add` — seed a file that exists nowhere yet
+
+A new standard config (a release-it shim, say) starts out present in zero
+workspaces, so `init` has nothing to cluster. `add` writes the entry,
+generates everywhere and keeps init's full contract — generated files
+leave the git index and the `.gitignore` block is re-synthesized from ALL
+managed entries, exactly where init would put them:
+
+```sh
+config-loom add .release-it.js .release-it.json   # known templates, every workspace
+config-loom add .eslintrc.json --template templates/eslint.json --include 'apps/.*'
+```
+
+Content sources, in order: `--template <repo-relative path>`, then the
+built-in **known templates** (`KNOWN_TEMPLATES`: `.release-it.js` and
+`.release-it.json`, each wiring one root `.release-it.base.js`). Anything
+else errors with hints. Already-managed files are refused — edit the loom
+or use `refresh`.
+
+Known templates may contain the `{{root}}` token: at sync time it expands
+to one `../` per workspace path segment, so `apps/api` renders
+`require('../../.release-it.base.js')` while a root-level `tool` renders
+`require('../.release-it.base.js')`. The loom keeps the token; only
+rendering expands it.
+
+### `refresh` — let the workspace state update the loom
+
+A new project lands with a hand-written `tsconfig.json`, or someone edits
+a generated file to fit it — normally that drift fights `sync`. `refresh`
+reverses the flow: it re-clusters every current file with init's exact
+machinery and rewrites each managed entry so the loom reproduces the
+workspace as it is, then syncs and refreshes the git contract. Run it
+after adopting files by hand; it is idempotent (a second run reports
+"loom already matches the workspace state").
+
+```sh
+config-loom refresh                    # re-derive every managed entry
+config-loom refresh tsconfig.json      # just this one
+config-loom refresh --dry-run          # print the loom it would write
+```
+
+What survives untouched: entry keys (alias keys keep working), curated
+top-level `exclude`, entries outside the requested filenames, entries
+sharing one filename, and entries whose files exist nowhere right now.
+`refresh` replaces `template:` sources with the inline rules found on
+disk — the workspace becomes the source of truth.
+
 ## Programmatic API
 
 ```ts
@@ -430,6 +492,9 @@ import {
   checkAll,
   buildPlan,
   initRepo,
+  addFiles,
+  refreshLoom,
+  KNOWN_TEMPLATES,
   deepMerge,
   computeDelta,
 } from '@codibre/config-loom';

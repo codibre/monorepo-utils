@@ -11,6 +11,7 @@ export {
   compileConfig,
   loadConfig,
   defaultFormatFor,
+  findConfigFile,
   DEFAULT_CONFIG_FILENAMES,
   FORBIDDEN_BASENAMES,
 } from './config';
@@ -28,7 +29,17 @@ export {
 export { deepMerge } from './merge';
 export { computeDelta } from './diff';
 export type { DeltaResult } from './diff';
-export { renderFile } from './render';
+export { renderFile, scopeFor, ROOT_TOKEN } from './render';
+export { addFiles } from './add';
+export type { AddOptions, AddResult, AddedEntry } from './add';
+export { refreshLoom } from './refresh';
+export type {
+  RefreshOptions,
+  RefreshResult,
+  RefreshEntryReport,
+} from './refresh';
+export { KNOWN_TEMPLATES } from './registry';
+export type { KnownTemplate } from './registry';
 export { syncAll } from './sync';
 export { checkAll } from './check';
 export type { CheckResult } from './check';
