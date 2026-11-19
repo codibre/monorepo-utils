@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.10.0...config-loom%400.11.0) (2026-11-19)
+
+### Features
+
+* **config-loom:** add adopts on-disk instances as rules; known template guarantees missing workspaces ([7cbef71](https://github.com/codibre/monorepo-utils/commit/7cbef710f0d04569c446e6f8b621026e0c7dd6dc))
+* **config-loom:** add and refresh commands with known-template registry ([7fa9b42](https://github.com/codibre/monorepo-utils/commit/7fa9b426b505b687cd90abd8f926310691600501)), closes [#31](https://github.com/codibre/monorepo-utils/issues/31)
+
 ## [0.10.0](https://github.com/codibre/monorepo-utils/compare/config-loom%400.9.1...config-loom%400.10.0) (2026-11-18)
 
 ### Features
