@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { checkAll } from './check';
+import { addFiles } from './add';
+import { refreshLoom } from './refresh';
 import { loadConfig } from './config';
 import { LoomError } from './errors';
 import { initRepo, serializeConfig } from './init';
@@ -51,6 +53,12 @@ interface InitOpts extends RunOpts {
   wire?: boolean;
 }
 
+interface AddOpts extends RunOpts {
+  template?: string;
+  include: string[];
+  exclude: string[];
+}
+
 /** parseArgs-style validation, phrased as a commander coercion (exit 2). */
 const numberArg = (value: string): number => {
   const n = Number(value);
@@ -59,6 +67,12 @@ const numberArg = (value: string): number => {
   }
   return n;
 };
+
+/** Accumulator for repeatable list options (`--include a --include b`). */
+const collectList = (value: string, previous: string[]): string[] => [
+  ...previous,
+  value,
+];
 
 /** Commander errors look like this; we map them onto process exit codes. */
 interface CommanderErrorLike {
@@ -303,6 +317,130 @@ export async function main(
         ? 'next: files are synced now, and every pnpm install will regenerate them'
         : 'next: add "postinstall": "config-loom sync" to the root package.json so every install regenerates the managed files (see README)',
     );
+  });
+
+  addShared(
+    program
+      .command('add <filenames...>')
+      .description(
+        'add managed files to the loom and generate them in every in-scope ' +
+          'workspace: existing on-disk files are adopted as-is (clustered ' +
+          'into default + rules); when none exists, content comes from ' +
+          '--template or the built-in known templates (.release-it.js, ' +
+          '.release-it.json with {{root}}); keeps the init ' +
+          'contract (generated files leave git, the .gitignore block is ' +
+          're-synthesized from all managed entries)',
+      )
+      .option(
+        '--template <path>',
+        'repo-relative template file supplying the content ' +
+          '(single filename only)',
+      )
+      .option(
+        '--include <regex>',
+        'restrict scope to workspaces matching this regex (repeatable)',
+        collectList,
+        [],
+      )
+      .option(
+        '--exclude <regex>',
+        'workspaces that must never receive the file (repeatable)',
+        collectList,
+        [],
+      )
+      .option(
+        '--dry-run',
+        'report the planned entry and git effects; write nothing',
+      )
+      .option('--verbose', 'also list unchanged generated files'),
+  ).action(async (filenames: string[], opts: AddOpts) => {
+    const root = path.resolve(process.cwd(), opts.root);
+    const result = await addFiles(root, filenames, {
+      configPath: opts.config,
+      template: opts.template,
+      include: opts.include,
+      exclude: opts.exclude,
+      dryRun: opts.dryRun === true,
+      runner: deps.runner,
+    });
+    for (const added of result.added) {
+      console.log(
+        `entry "${added.entryName}" ${opts.dryRun === true ? 'would be added' : 'added'} to ${result.configPath} (content: ${added.source})`,
+      );
+      for (const item of added.generated) {
+        console.log(
+          `  ${item.status === 'created' ? '+' : '~'} ${item.workspace}/${item.file}`,
+        );
+      }
+    }
+    if (result.gitRepo) {
+      console.log(
+        opts.dryRun === true
+          ? `(dry run) git: would untrack ${result.untracked.length} file(s); .gitignore block would hold ${result.ignorePatterns.length} pattern(s)`
+          : `git: untracked ${result.untracked.length} file(s), gitignore block updated (${result.ignorePatterns.length} pattern(s))`,
+      );
+    } else {
+      console.log('no git repo: untracking and .gitignore block skipped');
+    }
+    if (opts.dryRun === true) {
+      console.log('(dry run — nothing written)');
+    }
+  });
+
+  addShared(
+    program
+      .command('refresh [filenames...]')
+      .description(
+        're-derive managed entries from the CURRENT workspace state: manual ' +
+          'configs in a new project (or hand edits of generated ones) become ' +
+          'rules, so the loom does not need manual editing; entry keys, ' +
+          'curated excludes and untouched entries survive; then sync and ' +
+          "refresh the git contract exactly like init's block",
+      )
+      .option('--dry-run', 'print the loom refresh would write; change nothing')
+      .option('--verbose', 'also list unchanged files'),
+  ).action(async (filenames: string[], opts: RunOpts) => {
+    const root = path.resolve(process.cwd(), opts.root);
+    const result = await refreshLoom(root, {
+      configPath: opts.config,
+      filenames: filenames.length > 0 ? filenames : undefined,
+      dryRun: opts.dryRun === true,
+      runner: deps.runner,
+    });
+    for (const report of result.reports) {
+      const mark =
+        report.status === 'updated'
+          ? '~'
+          : report.status === 'preserved'
+            ? '='
+            : ' ';
+      const reason = report.reason === undefined ? '' : ` (${report.reason})`;
+      console.log(
+        `${mark} ${report.file}: rules ${report.rules[0]} → ${report.rules[1]} — ${report.status}${reason}`,
+      );
+    }
+    if (opts.dryRun === true) {
+      if (result.changed) {
+        console.log(`# loom refresh would write to ${result.configPath}:`);
+        process.stdout.write(result.newConfig);
+      } else {
+        console.log('loom already matches the workspace state');
+      }
+      return;
+    }
+    console.log(
+      result.changed
+        ? `wrote ${result.configPath}`
+        : 'loom already matches the workspace state',
+    );
+    if (result.gitRepo) {
+      console.log(
+        `git: untracked ${result.untracked.length} file(s), gitignore block updated (${result.ignorePatterns.length} pattern(s))`,
+      );
+    }
+    if (result.sync) {
+      printSync(result.sync, opts.verbose === true);
+    }
   });
 
   if (argv.length === 0) {

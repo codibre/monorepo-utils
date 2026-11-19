@@ -1,4 +1,14 @@
+import { readFile } from 'node:fs/promises';
 import type { FileFormat, JsonObject, JsonValue } from './types';
+
+/** Read a file, or null when it does not exist (or cannot be read). */
+export async function readOrNull(target: string): Promise<string | null> {
+  try {
+    return await readFile(target, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 export function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

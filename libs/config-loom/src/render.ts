@@ -4,6 +4,27 @@ import { isTextLike } from './util';
 import type { CompiledFileEntry, CompiledScope, JsonValue } from './types';
 
 /**
+ * `{{root}}` placeholder: render expands it per workspace into the relative
+ * path walking up to the repo root (one `../` per path segment), so uniform
+ * shims that reference a repo-root file — the release-it base config is the
+ * canonical case — are stored once in the loom yet stay correct at any
+ * workspace nesting depth.
+ */
+export const ROOT_TOKEN = '{{root}}';
+
+function rootWalk(workspace: string): string {
+  const depth = workspace.split('/').filter((part) => part !== '').length;
+  // no trailing separator: templates write `{{root}}/file`, so `..`,`../..`
+  return depth === 0 ? '.' : '../'.repeat(depth).slice(0, -1);
+}
+
+function applyRootToken(body: string, workspace: string): string {
+  return body.includes(ROOT_TOKEN)
+    ? body.split(ROOT_TOKEN).join(rootWalk(workspace))
+    : body;
+}
+
+/**
  * The entry scope that generates `file` for this workspace: the first scope
  * whose `include` matches (or has no include) and whose `exclude` does not.
  * A scope's exclude is decisive — once a scope claims a workspace, its
@@ -55,7 +76,10 @@ export function renderFile(
     if (content === null) {
       return null;
     }
-    return scope.banner ? `${scope.banner}\n${content}` : content;
+    return applyRootToken(
+      scope.banner ? `${scope.banner}\n${content}` : content,
+      workspace,
+    );
   }
 
   let merged: JsonValue = scope.defaultValue;
@@ -66,7 +90,10 @@ export function renderFile(
     scope.format === 'yaml'
       ? yamlCanonicalText(merged)
       : `${JSON.stringify(merged, null, 2)}\n`;
-  return scope.banner ? `${scope.banner}\n${body}` : body;
+  return applyRootToken(
+    scope.banner ? `${scope.banner}\n${body}` : body,
+    workspace,
+  );
 }
 
 /**
@@ -102,5 +129,20 @@ export function renderCandidates(entry: CompiledFileEntry): string[] {
       out.push(wrap(deepMerge(base, rule.value, scope.arrays)));
     }
   }
-  return out;
+  // Tokenized candidates cannot be rendered without a workspace: expand
+  // depths 1..4 so delete-authorship proof still matches files written to
+  // real (nested) workspaces. Deeper nesting simply falls back to the
+  // conservative "unprovable, keep on disk" path.
+  const expanded: string[] = [];
+  for (const candidate of out) {
+    expanded.push(candidate);
+    if (candidate.includes(ROOT_TOKEN)) {
+      for (let depth = 1; depth <= 4; depth += 1) {
+        expanded.push(
+          candidate.split(ROOT_TOKEN).join('../'.repeat(depth).slice(0, -1)),
+        );
+      }
+    }
+  }
+  return expanded;
 }
