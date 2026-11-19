@@ -1,6 +1,6 @@
 {
   "name": "config-loom",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Eliminate config drift in pnpm + Turborepo monorepos: generate tsconfig/eslint/vitest/jest files from one regex-rules template, kept out of git",
   "keywords": [
     "turborepo",
